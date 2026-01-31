@@ -1,0 +1,29 @@
+# Rustfmt Configuration
+# Based on Stable Rustfmt 2.0 Options
+# Reference: https://rust-lang.github.io/rustfmt/
+
+edition = "2021"
+
+# Style: Dense & Wide
+# Matches the codebase's use of long single-line chains.
+max_width = 140
+
+# Spacing
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+
+# Imports
+# 'reorder_imports' is stable and recommended for consistency.
+reorder_imports = true
+
+# Shorthands (Stable)
+# Converts `Constructor { x: x }` to `Constructor { x }`
+use_field_init_shorthand = true
+# Converts `result?` style (standard in 2018+)
+use_try_shorthand = true
+
+# Miscellaneous Stable Options
+# Wrap comments at max_width? (Default is false, uncomment to enable if stable in your version, but usually stable)
+# wrap_comments = true 
+# (Note: wrap_comments is unstable in some versions, leaving commented out to ensure stability)
