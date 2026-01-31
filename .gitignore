@@ -1,0 +1,18 @@
+# Binary
+/bl
+/cmd/bl/bl
+
+# Local beads database
+.beads-lite/*
+
+
+# Added by cargo
+
+./target/*
+.claude/*
+./beads-lite/*
+logs/*
+.cbi/*
+docs/*
+target/*
+PROMPTS.md
