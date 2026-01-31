@@ -1,6 +1,7 @@
 # Rustfmt Configuration
 # Based on Stable Rustfmt 2.0 Options
 # Reference: https://rust-lang.github.io/rustfmt/
+# create by FxcL
 
 edition = "2021"
 
