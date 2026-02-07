@@ -30,6 +30,22 @@ bl close <tests-id>
 bl ready                                        # now "Deploy" shows
 ```
 
+### Task Origin Tracking
+
+Use `--discovered-from` to track where a task was discovered:
+
+```bash
+bl create "Implement authentication"
+# While working on auth, discover a need to refactor the database
+bl create "Refactor user schema" --discovered-from <auth-id>
+bl show <refactor-id>  # shows "Discovered From: <auth-id>"
+
+# Or add to existing task
+bl update <existing-task-id> --discovered-from <source-id>
+```
+
+Unlike `--blocked-by`, discovered-from tasks appear in `bl ready` immediately — they record context, not execution order.
+
 ### CLI Reference
 
 ```
@@ -68,6 +84,7 @@ Create Flags:
   --priority <int>      Priority (0-4), default 2
   --type <string>       Type (task, bug, feature, epic), default task
   --blocked-by <id>     Issue ID that blocks this (repeatable)
+  --discovered-from <id> Issue ID this was discovered from (repeatable)
 
 Update Flags:
   --title <string>      New title
@@ -77,6 +94,7 @@ Update Flags:
   --description <text>  New description
   --blocked-by <id>     Add blocker (repeatable)
   --unblock <id>        Remove blocker (repeatable)
+  --discovered-from <id> Add discovered-from link (repeatable)
 
 Close Flags:
   --resolution <string> Resolution (done, wontfix, duplicate), default done

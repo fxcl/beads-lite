@@ -47,6 +47,9 @@ pub enum Commands {
         /// Issue ID that blocks this (repeatable)
         #[arg(long = "blocked-by")]
         blocked_by: Vec<String>,
+        /// Issue ID this was discovered from (repeatable)
+        #[arg(long = "discovered-from")]
+        discovered_from: Vec<String>,
     },
     /// List all issues
     List {
@@ -102,6 +105,9 @@ pub enum Commands {
         /// Remove blocker (repeatable)
         #[arg(long)]
         unblock: Vec<String>,
+        /// Add discovered-from link (repeatable)
+        #[arg(long = "discovered-from")]
+        discovered_from: Vec<String>,
     },
     /// Delete an issue permanently
     Delete {
@@ -189,7 +195,8 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             priority,
             r#type,
             blocked_by,
-        } => cmd_create(title, description, priority, r#type, blocked_by, writer),
+            discovered_from,
+        } => cmd_create(title, description, priority, r#type, blocked_by, discovered_from, writer),
         Commands::List {
             json,
             tree,
@@ -208,7 +215,8 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             description,
             blocked_by,
             unblock,
-        } => cmd_update(id, title, status, priority, r#type, description, blocked_by, unblock, writer),
+            discovered_from,
+        } => cmd_update(id, title, status, priority, r#type, description, blocked_by, unblock, discovered_from, writer),
         Commands::Delete { id, confirm } => cmd_delete(id, confirm, writer),
         Commands::Close { id, resolution } => cmd_close(id, resolution, writer),
         Commands::Ready { json, tree, priority, r#type } => cmd_ready(json, tree, priority, r#type, writer),
@@ -256,6 +264,7 @@ Create Flags:
   --priority <int>      Priority (0-4), default 2
   --type <string>       Type (task, bug, feature, epic), default task
   --blocked-by <id>     Issue ID that blocks this (repeatable)
+  --discovered-from <id> Issue ID this was discovered from (repeatable)
 
 Update Flags:
   --title <string>      New title
@@ -265,6 +274,7 @@ Update Flags:
   --description <text>  New description
   --blocked-by <id>     Add blocker (repeatable)
   --unblock <id>        Remove blocker (repeatable)
+  --discovered-from <id> Add discovered-from link (repeatable)
 
 Close Flags:
   --resolution <string> Resolution (done, wontfix, duplicate), default done
@@ -289,10 +299,11 @@ fn cmd_create<W: Write>(
     priority: i32,
     issue_type: String,
     blocked_by: Vec<String>,
+    discovered_from: Vec<String>,
     writer: &mut W,
 ) -> Result<(), String> {
     if title.is_empty() {
-        return Err("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>]".to_string());
+        return Err("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>] [--discovered-from <id>]".to_string());
     }
 
     let title = title.join(" ");
@@ -315,6 +326,17 @@ fn cmd_create<W: Write>(
         store
             .add_dependency(&issue.id, blocker_id, DepType::Blocks)
             .map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
+    }
+
+    // Add discovered-from links
+    for source_id in &discovered_from {
+        if source_id == &issue.id {
+            return Err("issue cannot be discovered from itself".to_string());
+        }
+        store.get_issue(source_id).map_err(|e| format!("source issue {}: {}", source_id, e))?;
+        store
+            .add_dependency(&issue.id, source_id, DepType::DiscoveredFrom)
+            .map_err(|e| format!("source issue {}: {}", source_id, e))?;
     }
 
     writeln!(writer, "Created {}: {}", issue.id, issue.title).map_err(|e| e.to_string())?;
@@ -432,13 +454,41 @@ fn cmd_show<W: Write>(id: String, json: bool, writer: &mut W) -> Result<(), Stri
         writeln!(writer, "Resolution: {}", issue.resolution).map_err(|e| e.to_string())?;
     }
 
-    // Show dependencies
+    // Show dependencies, grouped by type
     if let Ok(deps) = store.get_dependencies(&id) {
         if !deps.is_empty() {
-            writeln!(writer, "\nDependencies:").map_err(|e| e.to_string())?;
+            let mut blockers = Vec::new();
+            let mut discovered_from = Vec::new();
+            
             for dep in deps {
-                writeln!(writer, "  {} {}", dep.dep_type, dep.depends_on_id)
-                    .map_err(|e| e.to_string())?;
+                match dep.dep_type {
+                    DepType::Blocks => blockers.push(dep),
+                    DepType::DiscoveredFrom => discovered_from.push(dep),
+                }
+            }
+            
+            if !blockers.is_empty() {
+                writeln!(writer, "\nBlockers:").map_err(|e| e.to_string())?;
+                for dep in blockers {
+                    if let Ok(blocker) = store.get_issue(&dep.depends_on_id) {
+                        writeln!(writer, "  - {}: {}", dep.depends_on_id, blocker.title)
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        writeln!(writer, "  - {}", dep.depends_on_id).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            
+            if !discovered_from.is_empty() {
+                writeln!(writer, "\nDiscovered From:").map_err(|e| e.to_string())?;
+                for dep in discovered_from {
+                    if let Ok(source) = store.get_issue(&dep.depends_on_id) {
+                        writeln!(writer, "  - {}: {}", dep.depends_on_id, source.title)
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        writeln!(writer, "  - {}", dep.depends_on_id).map_err(|e| e.to_string())?;
+                    }
+                }
             }
         }
     }
@@ -455,6 +505,7 @@ fn cmd_update<W: Write>(
     description: Option<String>,
     blocked_by: Vec<String>,
     unblock: Vec<String>,
+    discovered_from: Vec<String>,
     writer: &mut W,
 ) -> Result<(), String> {
     let store = open_store()?;
@@ -512,6 +563,17 @@ fn cmd_update<W: Write>(
         store
             .remove_dependency(&id, blocker_id, DepType::Blocks)
             .map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
+    }
+
+    // Add discovered-from links
+    for source_id in &discovered_from {
+        if source_id == &id {
+            return Err("issue cannot be discovered from itself".to_string());
+        }
+        store.get_issue(source_id).map_err(|e| format!("source issue {}: {}", source_id, e))?;
+        store
+            .add_dependency(&id, source_id, DepType::DiscoveredFrom)
+            .map_err(|e| format!("source issue {}: {}", source_id, e))?;
     }
 
     writeln!(writer, "Updated {}: {}", id, issue.title).map_err(|e| e.to_string())?;

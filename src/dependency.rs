@@ -10,18 +10,21 @@ use thiserror::Error;
 #[serde(rename_all = "snake_case")]
 pub enum DepType {
     Blocks,
+    DiscoveredFrom,
 }
 
 impl DepType {
     pub fn as_str(&self) -> &'static str {
         match self {
             DepType::Blocks => "blocks",
+            DepType::DiscoveredFrom => "discovered_from",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "blocks" => Some(DepType::Blocks),
+            "discovered_from" | "discovered-from" => Some(DepType::DiscoveredFrom),
             _ => None,
         }
     }
@@ -106,5 +109,20 @@ mod tests {
 
         let dep = Dependency::new("bl-0001", "", DepType::Blocks);
         assert!(dep.validate().is_err());
+    }
+
+    #[test]
+    fn test_discovered_from_type() {
+        let dep = Dependency::new("bl-0001", "bl-0002", DepType::DiscoveredFrom);
+        assert_eq!(dep.dep_type, DepType::DiscoveredFrom);
+        assert_eq!(dep.dep_type.as_str(), "discovered_from");
+    }
+
+    #[test]
+    fn test_dep_type_from_str() {
+        assert_eq!(DepType::from_str("blocks"), Some(DepType::Blocks));
+        assert_eq!(DepType::from_str("discovered_from"), Some(DepType::DiscoveredFrom));
+        assert_eq!(DepType::from_str("discovered-from"), Some(DepType::DiscoveredFrom));
+        assert_eq!(DepType::from_str("invalid"), None);
     }
 }
