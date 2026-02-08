@@ -46,14 +46,26 @@ fn test_repro_bug_ready_shows_blocked() {
 
     // 4. Set Dependencies
     // API blocked by DB
-    env.cmd().arg("update").arg(&id_api).arg("--blocked-by").arg(&id_db).assert().success();
+    env.cmd()
+        .arg("update")
+        .arg(&id_api)
+        .arg("--blocked-by")
+        .arg(&id_db)
+        .assert()
+        .success();
     // UI blocked by API
-    env.cmd().arg("update").arg(&id_ui).arg("--blocked-by").arg(&id_api).assert().success();
+    env.cmd()
+        .arg("update")
+        .arg(&id_ui)
+        .arg("--blocked-by")
+        .arg(&id_api)
+        .assert()
+        .success();
 
     // 5. Check Ready
     let output = env.cmd().arg("ready").assert().success().get_output().stdout.clone();
     let ready_str = String::from_utf8(output).unwrap();
-    
+
     println!("Ready output:\n{}", ready_str);
 
     // Should ONLY see DB

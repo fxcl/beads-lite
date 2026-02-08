@@ -91,11 +91,7 @@ pub fn to_issue_export(issue: &Issue, deps: &[Dependency]) -> IssueExport {
 }
 
 /// Writes issues with their dependencies to a writer in JSONL format.
-pub fn write_issues_as_jsonl<W: Write>(
-    issues: &[Issue],
-    all_deps: &HashMap<String, Vec<Dependency>>,
-    writer: &mut W,
-) -> Result<()> {
+pub fn write_issues_as_jsonl<W: Write>(issues: &[Issue], all_deps: &HashMap<String, Vec<Dependency>>, writer: &mut W) -> Result<()> {
     for issue in issues {
         let deps = all_deps.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
         let export = to_issue_export(issue, deps);
@@ -265,9 +261,7 @@ mod tests {
         let issue_b = Issue::new("Task B");
         store.create_issue(&issue_a).unwrap();
         store.create_issue(&issue_b).unwrap();
-        store
-            .add_dependency(&issue_b.id, &issue_a.id, DepType::Blocks)
-            .unwrap();
+        store.add_dependency(&issue_b.id, &issue_a.id, DepType::Blocks).unwrap();
 
         // Export
         let mut buffer = Vec::new();

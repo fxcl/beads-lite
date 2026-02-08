@@ -49,7 +49,7 @@ fn test_create_basic() {
 
     let assert = env.cmd().arg("create").arg("Test Task").assert().success();
     let output = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    
+
     assert!(output.contains("Created bl-"));
     assert!(output.contains("Test Task"));
 }
@@ -85,7 +85,7 @@ fn test_create_and_list() {
 fn test_show() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     let assert = env.cmd().arg("create").arg("My Show Task").assert().success();
     let id = extract_id(&String::from_utf8(assert.get_output().stdout.clone()).unwrap());
 
@@ -103,7 +103,7 @@ fn test_show() {
 fn test_update() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     let assert = env.cmd().arg("create").arg("Task").assert().success();
     let id = extract_id(&String::from_utf8(assert.get_output().stdout.clone()).unwrap());
 
@@ -130,15 +130,11 @@ fn test_update() {
 fn test_close() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     let assert = env.cmd().arg("create").arg("Task").assert().success();
     let id = extract_id(&String::from_utf8(assert.get_output().stdout.clone()).unwrap());
 
-    env.cmd()
-        .arg("close")
-        .arg(&id)
-        .assert()
-        .success();
+    env.cmd().arg("close").arg(&id).assert().success();
 
     env.cmd()
         .arg("show")
@@ -153,17 +149,41 @@ fn test_close() {
 fn test_blocking_chain() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     // Create A
     let out_a = String::from_utf8(env.cmd().arg("create").arg("Task A").assert().success().get_output().stdout.clone()).unwrap();
     let id_a = extract_id(&out_a);
 
     // Create B blocked by A
-    let out_b = String::from_utf8(env.cmd().arg("create").arg("Task B").arg("--blocked-by").arg(&id_a).assert().success().get_output().stdout.clone()).unwrap();
+    let out_b = String::from_utf8(
+        env.cmd()
+            .arg("create")
+            .arg("Task B")
+            .arg("--blocked-by")
+            .arg(&id_a)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
     let id_b = extract_id(&out_b);
 
     // Create C blocked by B
-    let out_c = String::from_utf8(env.cmd().arg("create").arg("Task C").arg("--blocked-by").arg(&id_b).assert().success().get_output().stdout.clone()).unwrap();
+    let out_c = String::from_utf8(
+        env.cmd()
+            .arg("create")
+            .arg("Task C")
+            .arg("--blocked-by")
+            .arg(&id_b)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
     let _id_c = extract_id(&out_c);
 
     // Check Ready - only A should be visible
@@ -195,15 +215,27 @@ fn test_blocking_chain() {
 fn test_tree_output() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     let out_a = String::from_utf8(env.cmd().arg("create").arg("Top").assert().success().get_output().stdout.clone()).unwrap();
     let id_a = extract_id(&out_a);
 
-    let out_b = String::from_utf8(env.cmd().arg("create").arg("Child").arg("--blocked-by").arg(&id_a).assert().success().get_output().stdout.clone()).unwrap();
+    let out_b = String::from_utf8(
+        env.cmd()
+            .arg("create")
+            .arg("Child")
+            .arg("--blocked-by")
+            .arg(&id_a)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
     let _id_b = extract_id(&out_b);
 
     let tree = String::from_utf8(env.cmd().arg("list").arg("--tree").assert().success().get_output().stdout.clone()).unwrap();
-    
+
     // Check for box drawing character
     assert!(tree.contains("└──"));
     // A should be printed before B in the visual hierarchy (or at least structure is present)

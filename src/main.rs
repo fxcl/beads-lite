@@ -1,6 +1,6 @@
 //! beads-lite CLI entry point.
 
-use beads_lite::{Cli, run};
+use beads_lite::{run, Cli};
 use clap::Parser;
 use std::io;
 use std::process;

@@ -33,10 +33,14 @@ fn extract_id(output: &str) -> String {
 #[test]
 fn test_cmd_init() {
     let env = TestEnv::new();
-    env.cmd().arg("init").assert().success().stdout(predicate::str::contains("Initialized"));
+    env.cmd()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Initialized"));
     assert!(env.path.join(".beads-lite/beads.db").exists());
     // Idempotency check
-    env.cmd().arg("init").assert().success(); 
+    env.cmd().arg("init").assert().success();
 }
 
 // 2. CREATE (All flags)
@@ -45,17 +49,22 @@ fn test_cmd_create_full() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
 
-    let output = env.cmd()
+    let output = env
+        .cmd()
         .arg("create")
         .arg("Complex Task")
-        .arg("--description").arg("Detailed description")
-        .arg("--priority").arg("0")
-        .arg("--type").arg("bug")
+        .arg("--description")
+        .arg("Detailed description")
+        .arg("--priority")
+        .arg("0")
+        .arg("--type")
+        .arg("bug")
         .assert()
         .success()
         .get_output()
-        .stdout.clone();
-    
+        .stdout
+        .clone();
+
     let out_str = String::from_utf8(output).unwrap();
     let id = extract_id(&out_str);
     assert!(!id.is_empty());
@@ -78,21 +87,47 @@ fn test_cmd_list_filters() {
     // Create Task A, then update status
     let out = env.cmd().arg("create").arg("Task A").assert().success().get_output().stdout.clone();
     let id_a = extract_id(&String::from_utf8(out).unwrap());
-    
-    // Create does not support --status, must use update
-    env.cmd().arg("update").arg(&id_a).arg("--status").arg("in_progress").assert().success();
 
-    let out = env.cmd().arg("create").arg("Bug B").arg("--type").arg("bug").assert().success().get_output().stdout.clone();
+    // Create does not support --status, must use update
+    env.cmd()
+        .arg("update")
+        .arg(&id_a)
+        .arg("--status")
+        .arg("in_progress")
+        .assert()
+        .success();
+
+    let out = env
+        .cmd()
+        .arg("create")
+        .arg("Bug B")
+        .arg("--type")
+        .arg("bug")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
     let _id_b = extract_id(&String::from_utf8(out).unwrap());
 
     // Filter by status
-    env.cmd().arg("list").arg("--status").arg("in_progress")
-        .assert().success().stdout(predicate::str::contains("Task A"))
+    env.cmd()
+        .arg("list")
+        .arg("--status")
+        .arg("in_progress")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Task A"))
         .stdout(predicate::str::contains("Bug B").not());
 
     // Filter by type
-    env.cmd().arg("list").arg("--type").arg("bug")
-        .assert().success().stdout(predicate::str::contains("Bug B"))
+    env.cmd()
+        .arg("list")
+        .arg("--type")
+        .arg("bug")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Bug B"))
         .stdout(predicate::str::contains("Task A").not());
 }
 
@@ -101,12 +136,29 @@ fn test_cmd_list_filters() {
 fn test_cmd_show_json() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    let out = env.cmd().arg("create").arg("JSON Task").assert().success().get_output().stdout.clone();
+    let out = env
+        .cmd()
+        .arg("create")
+        .arg("JSON Task")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
     let id = extract_id(&String::from_utf8(out).unwrap());
 
-    let json_out = env.cmd().arg("show").arg(&id).arg("--json").assert().success().get_output().stdout.clone();
+    let json_out = env
+        .cmd()
+        .arg("show")
+        .arg(&id)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
     let json_str = String::from_utf8(json_out).unwrap();
-    
+
     assert!(json_str.contains("\"title\":\"JSON Task\""));
     assert!(json_str.contains("\"id\":\"bl-"));
 }
@@ -127,8 +179,11 @@ fn test_cmd_update_all() {
         .arg("--status").arg("closed") // This might close it?
         .assert().success();
 
-    env.cmd().arg("show").arg(&id)
-        .assert().success()
+    env.cmd()
+        .arg("show")
+        .arg(&id)
+        .assert()
+        .success()
         .stdout(predicate::str::contains("New"))
         .stdout(predicate::str::contains("New Desc"))
         .stdout(predicate::str::contains("P4"))
@@ -159,14 +214,23 @@ fn test_cmd_delete() {
 fn test_cmd_close_resolutions() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     let out = env.cmd().arg("create").arg("Task").assert().success().get_output().stdout.clone();
     let id = extract_id(&String::from_utf8(out).unwrap());
 
-    env.cmd().arg("close").arg(&id).arg("--resolution").arg("wontfix").assert().success();
-    
-    env.cmd().arg("show").arg(&id)
-        .assert().success()
+    env.cmd()
+        .arg("close")
+        .arg(&id)
+        .arg("--resolution")
+        .arg("wontfix")
+        .assert()
+        .success();
+
+    env.cmd()
+        .arg("show")
+        .arg(&id)
+        .assert()
+        .success()
         .stdout(predicate::str::contains("closed"))
         .stdout(predicate::str::contains("wontfix"));
 }
@@ -176,7 +240,7 @@ fn test_cmd_close_resolutions() {
 fn test_cmd_ready_complex() {
     let env = TestEnv::new();
     env.cmd().arg("init").assert().success();
-    
+
     let out_a = String::from_utf8(env.cmd().arg("create").arg("A").assert().success().get_output().stdout.clone()).unwrap();
     let id_a = extract_id(&out_a);
 
@@ -193,7 +257,7 @@ fn test_cmd_ready_complex() {
 
     // Verify remove blocker
     env.cmd().arg("update").arg(&id_b).arg("--unblock").arg(&id_a).assert().success();
-    
+
     // Now B should be ready
     let ready = String::from_utf8(env.cmd().arg("ready").assert().success().get_output().stdout.clone()).unwrap();
     assert!(ready.contains("A"));
@@ -214,13 +278,17 @@ fn test_cmd_import_export() {
 
     // Nuke database
     fs::remove_file(env.path.join(".beads-lite/beads.db")).unwrap();
-    
+
     // Re-init and import
     env.cmd().arg("init").assert().success();
     env.cmd().arg("import").arg(export_file.to_str().unwrap()).assert().success();
 
     // Verify
-    env.cmd().arg("list").assert().success().stdout(predicate::str::contains("ExportMe"));
+    env.cmd()
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ExportMe"));
 }
 
 // 10. ONBOARD
@@ -236,7 +304,19 @@ fn test_cmd_onboard() {
 #[test]
 fn test_cmd_version() {
     let env = TestEnv::new();
-    env.cmd().arg("version").assert().success().stdout(predicate::str::contains("bl version"));
-    env.cmd().arg("-v").assert().success().stdout(predicate::str::contains("bl version"));
-    env.cmd().arg("--version").assert().success().stdout(predicate::str::contains("bl version"));
+    env.cmd()
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bl version"));
+    env.cmd()
+        .arg("-v")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bl version"));
+    env.cmd()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bl version"));
 }

@@ -3,7 +3,7 @@
 use crate::dependency::{DepType, Dependency};
 use crate::issue::{Issue, IssueType, Resolution, Status};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
@@ -134,11 +134,7 @@ impl Store {
                 updated_at: DateTime::parse_from_rfc3339(&updated_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
-                closed_at: closed_str.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|t| t.with_timezone(&Utc))
-                        .ok()
-                }),
+                closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
                 close_reason: row.get(10)?,
             })
@@ -228,11 +224,7 @@ impl Store {
                 updated_at: DateTime::parse_from_rfc3339(&updated_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
-                closed_at: closed_str.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|t| t.with_timezone(&Utc))
-                        .ok()
-                }),
+                closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
                 close_reason: row.get(10)?,
             })
@@ -251,12 +243,7 @@ impl Store {
             INSERT INTO dependencies (issue_id, depends_on_id, type, created_at)
             VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![
-                dep.issue_id,
-                dep.depends_on_id,
-                dep.dep_type.as_str(),
-                dep.created_at.to_rfc3339(),
-            ],
+            params![dep.issue_id, dep.depends_on_id, dep.dep_type.as_str(), dep.created_at.to_rfc3339(),],
         )?;
         Ok(())
     }
@@ -274,10 +261,8 @@ impl Store {
 
     /// Removes all dependencies where the issue is the dependent.
     pub fn remove_all_dependencies(&self, issue_id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM dependencies WHERE issue_id = ?1",
-            params![issue_id],
-        )?;
+        self.conn
+            .execute("DELETE FROM dependencies WHERE issue_id = ?1", params![issue_id])?;
         Ok(())
     }
 
@@ -380,11 +365,7 @@ impl Store {
                 updated_at: DateTime::parse_from_rfc3339(&updated_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
-                closed_at: closed_str.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|t| t.with_timezone(&Utc))
-                        .ok()
-                }),
+                closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
                 close_reason: None,
             })
@@ -427,11 +408,7 @@ impl Store {
                 updated_at: DateTime::parse_from_rfc3339(&updated_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
-                closed_at: closed_str.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|t| t.with_timezone(&Utc))
-                        .ok()
-                }),
+                closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
                 close_reason: row.get(10)?,
             })
@@ -444,10 +421,7 @@ impl Store {
     pub fn delete_issue(&self, id: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
-        tx.execute(
-            "DELETE FROM dependencies WHERE issue_id = ?1 OR depends_on_id = ?1",
-            params![id],
-        )?;
+        tx.execute("DELETE FROM dependencies WHERE issue_id = ?1 OR depends_on_id = ?1", params![id])?;
 
         let rows = tx.execute("DELETE FROM issues WHERE id = ?1", params![id])?;
         if rows == 0 {

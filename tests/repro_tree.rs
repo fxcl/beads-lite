@@ -51,19 +51,19 @@ fn test_repro_tree_structure() {
     // 5. List Tree
     let output = env.cmd().arg("list").arg("--tree").assert().success().get_output().stdout.clone();
     let tree_str = String::from_utf8(output).unwrap();
-    
+
     println!("Tree output:\n{}", tree_str);
 
     // Should see structure chars
     // The previous analysis suggests '└──' or '├──' characters.
     // If flat, we see just lines of tasks.
-    
+
     assert!(tree_str.contains("└──"), "Tree output should contain branch characters");
     // Verify hierarchy order roughly (A then B then C)
     let idx_a = tree_str.find("DB").unwrap();
     let idx_b = tree_str.find("API").unwrap();
     let idx_c = tree_str.find("UI").unwrap();
-    
+
     assert!(idx_a < idx_b, "DB should be printed before API");
     assert!(idx_b < idx_c, "API should be printed before UI");
 }

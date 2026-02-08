@@ -16,13 +16,7 @@ pub fn format_issue_line(issue: &Issue) -> String {
 }
 
 /// Outputs issues in the appropriate format.
-pub fn output_issues<W: Write>(
-    store: &Store,
-    issues: &[Issue],
-    writer: &mut W,
-    json_out: bool,
-    tree_out: bool,
-) -> std::io::Result<()> {
+pub fn output_issues<W: Write>(store: &Store, issues: &[Issue], writer: &mut W, json_out: bool, tree_out: bool) -> std::io::Result<()> {
     if issues.is_empty() {
         if !json_out {
             writeln!(writer, "No issues found")?;
@@ -43,11 +37,7 @@ pub fn output_issues<W: Write>(
 }
 
 /// Outputs issues as JSONL.
-fn output_issues_json<W: Write>(
-    store: &Store,
-    issues: &[Issue],
-    writer: &mut W,
-) -> std::io::Result<()> {
+fn output_issues_json<W: Write>(store: &Store, issues: &[Issue], writer: &mut W) -> std::io::Result<()> {
     let all_deps = store.get_all_dependencies().unwrap_or_default();
     for issue in issues {
         let deps = all_deps.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -59,11 +49,7 @@ fn output_issues_json<W: Write>(
 }
 
 /// Outputs issues as a dependency tree.
-fn output_issues_tree<W: Write>(
-    store: &Store,
-    issues: &[Issue],
-    writer: &mut W,
-) -> std::io::Result<()> {
+fn output_issues_tree<W: Write>(store: &Store, issues: &[Issue], writer: &mut W) -> std::io::Result<()> {
     let all_deps = store.get_all_dependencies().unwrap_or_default();
 
     // Build issue map
@@ -84,27 +70,17 @@ fn output_issues_tree<W: Write>(
             let parent = issue_map.get(d.depends_on_id.as_str());
 
             if let (Some(child), Some(_)) = (child, parent) {
-                children
-                    .entry(d.depends_on_id.as_str())
-                    .or_default()
-                    .push(*child);
+                children.entry(d.depends_on_id.as_str()).or_default().push(*child);
                 is_child.insert(d.issue_id.as_str(), true);
             }
         }
     }
 
     // Roots are issues that aren't children of any open issue
-    let mut roots: Vec<&Issue> = issues
-        .iter()
-        .filter(|i| !is_child.contains_key(i.id.as_str()))
-        .collect();
+    let mut roots: Vec<&Issue> = issues.iter().filter(|i| !is_child.contains_key(i.id.as_str())).collect();
 
     // Sort roots by priority then ID
-    roots.sort_by(|a, b| {
-        a.priority
-            .cmp(&b.priority)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    roots.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
 
     // Render tree
     for root in roots {
@@ -116,23 +92,14 @@ fn output_issues_tree<W: Write>(
 }
 
 /// Recursively prints children with tree-drawing characters.
-fn print_tree<W: Write>(
-    writer: &mut W,
-    children: &HashMap<&str, Vec<&Issue>>,
-    parent_id: &str,
-    prefix: &str,
-) -> std::io::Result<()> {
+fn print_tree<W: Write>(writer: &mut W, children: &HashMap<&str, Vec<&Issue>>, parent_id: &str, prefix: &str) -> std::io::Result<()> {
     let kids = children.get(parent_id);
     if kids.is_none() {
         return Ok(());
     }
 
     let mut kids: Vec<_> = kids.unwrap().clone();
-    kids.sort_by(|a, b| {
-        a.priority
-            .cmp(&b.priority)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    kids.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
 
     for (i, child) in kids.iter().enumerate() {
         let is_last = i == kids.len() - 1;
@@ -147,11 +114,7 @@ fn print_tree<W: Write>(
 }
 
 /// Outputs a single issue as JSON.
-pub fn output_single_issue_json<W: Write>(
-    issue: &Issue,
-    deps: &[Dependency],
-    writer: &mut W,
-) -> std::io::Result<()> {
+pub fn output_single_issue_json<W: Write>(issue: &Issue, deps: &[Dependency], writer: &mut W) -> std::io::Result<()> {
     let export = to_issue_export(issue, deps);
     serde_json::to_writer(&mut *writer, &export).map_err(|e| std::io::Error::other(e))?;
     writeln!(writer)?;

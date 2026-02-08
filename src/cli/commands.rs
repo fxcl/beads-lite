@@ -206,9 +206,9 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             blocked_by,
             discovered_from,
         } => {
-             let store = open_store()?;
-             cmd_create(store, title, description, priority, r#type, blocked_by, discovered_from, writer)
-        },
+            let store = open_store()?;
+            cmd_create(store, title, description, priority, r#type, blocked_by, discovered_from, writer)
+        }
         Commands::List {
             json,
             tree,
@@ -220,11 +220,11 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
         } => {
             let store = open_store()?;
             cmd_list(store, json, tree, status, priority, r#type, resolution, blocked_by, writer)
-        },
+        }
         Commands::Show { id, json } => {
             let store = open_store()?;
             cmd_show(store, id, json, writer)
-        },
+        }
         Commands::Update {
             id,
             title,
@@ -237,32 +237,49 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             discovered_from,
         } => {
             let store = open_store()?;
-            cmd_update(store, id, title, status, priority, r#type, description, blocked_by, unblock, discovered_from, writer)
-        },
+            cmd_update(
+                store,
+                id,
+                title,
+                status,
+                priority,
+                r#type,
+                description,
+                blocked_by,
+                unblock,
+                discovered_from,
+                writer,
+            )
+        }
         Commands::Delete { id, confirm } => {
             let store = open_store()?;
             cmd_delete(store, id, confirm, writer)
-        },
+        }
         Commands::Close { id, resolution, reason } => {
             let store = open_store()?;
             cmd_close(store, id, resolution, reason, writer)
-        },
-        Commands::Ready { json, tree, priority, r#type } => {
+        }
+        Commands::Ready {
+            json,
+            tree,
+            priority,
+            r#type,
+        } => {
             let store = open_store()?;
             cmd_ready(store, json, tree, priority, r#type, writer)
-        },
+        }
         Commands::Export { file } => {
             let store = open_store()?;
             cmd_export(store, file, writer)
-        },
+        }
         Commands::Import { file } => {
             let store = open_store()?;
             cmd_import(store, &file, writer)
-        },
+        }
         Commands::Sync => {
             let store = open_store()?;
             cmd_sync(store, writer)
-        },
+        }
         Commands::Onboard => cmd_onboard(writer),
         Commands::Version => cmd_version(writer),
         Commands::Upgrade => cmd_upgrade(writer),
@@ -270,7 +287,9 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
 }
 
 fn print_help<W: Write>(writer: &mut W) {
-    let _ = writeln!(writer, r#"Usage: bl <command> [args]
+    let _ = writeln!(
+        writer,
+        r#"Usage: bl <command> [args]
 
 Commands:
   init                  Initialize .beads-lite/ directory and database
@@ -325,7 +344,8 @@ Close Flags:
   --reason <text>       Reason for closing
 
 Delete Flags:
-  --confirm             Required to confirm permanent deletion"#);
+  --confirm             Required to confirm permanent deletion"#
+    );
 }
 
 fn cmd_init<W: Write>(writer: &mut W) -> Result<(), String> {
@@ -333,8 +353,11 @@ fn cmd_init<W: Write>(writer: &mut W) -> Result<(), String> {
     Store::new(get_db_path()).map_err(|e| format!("failed to initialize database: {}", e))?;
     writeln!(writer, "Initialized beads-lite in {}", BEADS_DIR).map_err(|e| e.to_string())?;
     writeln!(writer).map_err(|e| e.to_string())?;
-    writeln!(writer, "Tip: Run 'bl onboard > .claude/CLAUDE.md' to set up Claude Code integration")
-        .map_err(|e| e.to_string())?;
+    writeln!(
+        writer,
+        "Tip: Run 'bl onboard > .claude/CLAUDE.md' to set up Claude Code integration"
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -353,13 +376,12 @@ fn cmd_create<W: Write>(
     }
 
     let title = title.join(" ");
-    
 
     let mut issue = Issue::new(&title);
     issue.description = description.unwrap_or_default();
     issue.priority = priority;
-    issue.issue_type = IssueType::from_str(&issue_type)
-        .ok_or_else(|| format!("invalid type: {} (valid: task, bug, feature, epic)", issue_type))?;
+    issue.issue_type =
+        IssueType::from_str(&issue_type).ok_or_else(|| format!("invalid type: {} (valid: task, bug, feature, epic)", issue_type))?;
 
     store.create_issue(&issue).map_err(|e| format!("failed to create issue: {}", e))?;
 
@@ -368,7 +390,9 @@ fn cmd_create<W: Write>(
         if blocker_id == &issue.id {
             return Err("issue cannot block itself".to_string());
         }
-        store.get_issue(blocker_id).map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
+        store
+            .get_issue(blocker_id)
+            .map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
         store
             .add_dependency(&issue.id, blocker_id, DepType::Blocks)
             .map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
@@ -379,7 +403,9 @@ fn cmd_create<W: Write>(
         if source_id == &issue.id {
             return Err("issue cannot be discovered from itself".to_string());
         }
-        store.get_issue(source_id).map_err(|e| format!("source issue {}: {}", source_id, e))?;
+        store
+            .get_issue(source_id)
+            .map_err(|e| format!("source issue {}: {}", source_id, e))?;
         store
             .add_dependency(&issue.id, source_id, DepType::DiscoveredFrom)
             .map_err(|e| format!("source issue {}: {}", source_id, e))?;
@@ -465,10 +491,11 @@ fn cmd_list<W: Write>(
     writer: &mut W,
 ) -> Result<(), String> {
     validate_filters(&status, &priority, &issue_type, &resolution)?;
-    
 
     let issues = if let Some(blocker_id) = blocked_by {
-        store.get_blocked_by(&blocker_id).map_err(|e| format!("failed to get blocked issues: {}", e))?
+        store
+            .get_blocked_by(&blocker_id)
+            .map_err(|e| format!("failed to get blocked issues: {}", e))?
     } else {
         store.list_issues().map_err(|e| format!("failed to list issues: {}", e))?
     };
@@ -479,7 +506,6 @@ fn cmd_list<W: Write>(
 }
 
 fn cmd_show<W: Write>(store: Store, id: String, json: bool, writer: &mut W) -> Result<(), String> {
-    
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
 
     if json {
@@ -496,13 +522,10 @@ fn cmd_show<W: Write>(store: Store, id: String, json: bool, writer: &mut W) -> R
     if !issue.description.is_empty() {
         writeln!(writer, "Description: {}", issue.description).map_err(|e| e.to_string())?;
     }
-    writeln!(writer, "Created:  {}", issue.created_at.format("%Y-%m-%d %H:%M:%S"))
-        .map_err(|e| e.to_string())?;
-    writeln!(writer, "Updated:  {}", issue.updated_at.format("%Y-%m-%d %H:%M:%S"))
-        .map_err(|e| e.to_string())?;
+    writeln!(writer, "Created:  {}", issue.created_at.format("%Y-%m-%d %H:%M:%S")).map_err(|e| e.to_string())?;
+    writeln!(writer, "Updated:  {}", issue.updated_at.format("%Y-%m-%d %H:%M:%S")).map_err(|e| e.to_string())?;
     if let Some(closed) = issue.closed_at {
-        writeln!(writer, "Closed:   {}", closed.format("%Y-%m-%d %H:%M:%S"))
-            .map_err(|e| e.to_string())?;
+        writeln!(writer, "Closed:   {}", closed.format("%Y-%m-%d %H:%M:%S")).map_err(|e| e.to_string())?;
     }
     if !matches!(issue.resolution, Resolution::None) {
         writeln!(writer, "Resolution: {}", issue.resolution).map_err(|e| e.to_string())?;
@@ -516,32 +539,30 @@ fn cmd_show<W: Write>(store: Store, id: String, json: bool, writer: &mut W) -> R
         if !deps.is_empty() {
             let mut blockers = Vec::new();
             let mut discovered_from = Vec::new();
-            
+
             for dep in deps {
                 match dep.dep_type {
                     DepType::Blocks => blockers.push(dep),
                     DepType::DiscoveredFrom => discovered_from.push(dep),
                 }
             }
-            
+
             if !blockers.is_empty() {
                 writeln!(writer, "\nBlockers:").map_err(|e| e.to_string())?;
                 for dep in blockers {
                     if let Ok(blocker) = store.get_issue(&dep.depends_on_id) {
-                        writeln!(writer, "  - {}: {}", dep.depends_on_id, blocker.title)
-                            .map_err(|e| e.to_string())?;
+                        writeln!(writer, "  - {}: {}", dep.depends_on_id, blocker.title).map_err(|e| e.to_string())?;
                     } else {
                         writeln!(writer, "  - {}", dep.depends_on_id).map_err(|e| e.to_string())?;
                     }
                 }
             }
-            
+
             if !discovered_from.is_empty() {
                 writeln!(writer, "\nDiscovered From:").map_err(|e| e.to_string())?;
                 for dep in discovered_from {
                     if let Ok(source) = store.get_issue(&dep.depends_on_id) {
-                        writeln!(writer, "  - {}: {}", dep.depends_on_id, source.title)
-                            .map_err(|e| e.to_string())?;
+                        writeln!(writer, "  - {}: {}", dep.depends_on_id, source.title).map_err(|e| e.to_string())?;
                     } else {
                         writeln!(writer, "  - {}", dep.depends_on_id).map_err(|e| e.to_string())?;
                     }
@@ -566,7 +587,6 @@ fn cmd_update<W: Write>(
     discovered_from: Vec<String>,
     writer: &mut W,
 ) -> Result<(), String> {
-    
     let mut issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
 
     // Validate inputs
@@ -610,7 +630,9 @@ fn cmd_update<W: Write>(
         if blocker_id == &id {
             return Err("issue cannot block itself".to_string());
         }
-        store.get_issue(blocker_id).map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
+        store
+            .get_issue(blocker_id)
+            .map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
         store
             .add_dependency(&id, blocker_id, DepType::Blocks)
             .map_err(|e| format!("blocker issue {}: {}", blocker_id, e))?;
@@ -628,7 +650,9 @@ fn cmd_update<W: Write>(
         if source_id == &id {
             return Err("issue cannot be discovered from itself".to_string());
         }
-        store.get_issue(source_id).map_err(|e| format!("source issue {}: {}", source_id, e))?;
+        store
+            .get_issue(source_id)
+            .map_err(|e| format!("source issue {}: {}", source_id, e))?;
         store
             .add_dependency(&id, source_id, DepType::DiscoveredFrom)
             .map_err(|e| format!("source issue {}: {}", source_id, e))?;
@@ -643,7 +667,6 @@ fn cmd_delete<W: Write>(store: Store, id: String, confirm: bool, writer: &mut W)
         return Err("delete requires --confirm flag".to_string());
     }
 
-    
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
     store.delete_issue(&id).map_err(|e| format!("failed to delete: {}", e))?;
     writeln!(writer, "Deleted {}: {}", id, issue.title).map_err(|e| e.to_string())?;
@@ -654,7 +677,6 @@ fn cmd_close<W: Write>(store: Store, id: String, resolution: String, reason: Opt
     let res = Resolution::from_str(&resolution)
         .ok_or_else(|| format!("invalid resolution: {} (must be done, wontfix, or duplicate)", resolution))?;
 
-    
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
     store.close_issue(&id, res, reason).map_err(|e| format!("failed to close: {}", e))?;
     writeln!(writer, "Closed {}: {}", id, issue.title).map_err(|e| e.to_string())?;
@@ -670,7 +692,7 @@ fn cmd_ready<W: Write>(
     writer: &mut W,
 ) -> Result<(), String> {
     validate_filters(&None, &priority, &issue_type, &None)?;
-    
+
     let issues = store.get_ready_work().map_err(|e| format!("failed to get ready work: {}", e))?;
     let issues = filter_issues(issues, &None, &priority, &issue_type, &None);
     output_issues(&store, &issues, writer, json, tree).map_err(|e| e.to_string())?;
@@ -678,8 +700,6 @@ fn cmd_ready<W: Write>(
 }
 
 fn cmd_export<W: Write>(store: Store, file: Option<PathBuf>, writer: &mut W) -> Result<(), String> {
-    
-
     if let Some(path) = file {
         export_to_file(&store, &path).map_err(|e| format!("export failed: {}", e))?;
         writeln!(writer, "Exported to {}", path.display()).map_err(|e| e.to_string())?;
@@ -691,8 +711,7 @@ fn cmd_export<W: Write>(store: Store, file: Option<PathBuf>, writer: &mut W) -> 
 
 fn cmd_import<W: Write>(mut store: Store, file: &PathBuf, writer: &mut W) -> Result<(), String> {
     let stats = import_from_file(&mut store, file).map_err(|e| format!("import failed: {}", e))?;
-    writeln!(writer, "Imported: {} created, {} updated", stats.created, stats.updated)
-        .map_err(|e| e.to_string())?;
+    writeln!(writer, "Imported: {} created, {} updated", stats.created, stats.updated).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -702,8 +721,8 @@ fn cmd_sync<W: Write>(store: Store, writer: &mut W) -> Result<(), String> {
     // We could try to find the git root, but for now assuming cwd is ok or using store's path
     // Store path is usually .beads-lite/beads.db
     // So the repo root is the parent of .beads-lite
-    let repo_path = cwd; 
-    
+    let repo_path = cwd;
+
     let mut engine = SyncEngine::new(store, repo_path);
     if let Err(e) = engine.run() {
         writeln!(writer, "Sync failed: {}", e).map_err(|e| e.to_string())?;
@@ -803,13 +822,10 @@ fn cmd_upgrade<W: Write>(writer: &mut W) -> Result<(), String> {
         .call()
         .map_err(|e| format!("failed to check for updates: {}", e))?;
 
-    let release: serde_json::Value = serde_json::from_reader(response.into_body().into_reader())
-        .map_err(|e| format!("failed to parse release info: {}", e))?;
+    let release: serde_json::Value =
+        serde_json::from_reader(response.into_body().into_reader()).map_err(|e| format!("failed to parse release info: {}", e))?;
 
-
-    let latest = release["tag_name"]
-        .as_str()
-        .ok_or("no tag_name in release")?;
+    let latest = release["tag_name"].as_str().ok_or("no tag_name in release")?;
 
     if latest == VERSION {
         writeln!(writer, "Already at latest version {}", VERSION).map_err(|e| e.to_string())?;
@@ -822,19 +838,13 @@ fn cmd_upgrade<W: Write>(writer: &mut W) -> Result<(), String> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let tarball = format!("beads-lite_{}_{}.tar.gz", os, arch);
-    let download_url = format!(
-        "https://github.com/{}/releases/download/{}/{}",
-        REPO, latest, tarball
-    );
+    let download_url = format!("https://github.com/{}/releases/download/{}/{}", REPO, latest, tarball);
 
     // Download tarball
-    let response = ureq::get(&download_url)
-        .call()
-        .map_err(|e| format!("failed to download: {}", e))?;
+    let response = ureq::get(&download_url).call().map_err(|e| format!("failed to download: {}", e))?;
 
     // Get current executable path
-    let exec_path = std::env::current_exe()
-        .map_err(|e| format!("failed to get executable path: {}", e))?;
+    let exec_path = std::env::current_exe().map_err(|e| format!("failed to get executable path: {}", e))?;
     let exec_path = exec_path
         .canonicalize()
         .map_err(|e| format!("failed to resolve executable path: {}", e))?;
@@ -856,9 +866,7 @@ fn cmd_upgrade<W: Write>(writer: &mut W) -> Result<(), String> {
 
     let extract_dir = tmp_dir.join(format!("bl-upgrade-extract-{}", std::process::id()));
     fs::create_dir_all(&extract_dir).map_err(|e| format!("failed to create extract dir: {}", e))?;
-    archive
-        .unpack(&extract_dir)
-        .map_err(|e| format!("failed to extract: {}", e))?;
+    archive.unpack(&extract_dir).map_err(|e| format!("failed to extract: {}", e))?;
 
     // Replace executable
     let new_binary = extract_dir.join("bl");

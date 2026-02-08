@@ -56,12 +56,12 @@ impl SyncEngine {
         // But for our jsonl files, we want to just fetch and merge manually.
         // So maybe just 'git fetch' then 'git checkout origin/main -- issues.jsonl'?
         // No, 'bl sync' assumes full repo sync.
-        
+
         // Let's use 'git pull --rebase' for simplicity now.
         if let Err(e) = self.git_exec(&["pull", "--rebase"]) {
-             println!("Git pull failed (maybe no remote?): {}", e);
-             // Verify if we can proceed. If local repo only, maybe ok?
-             // But 'load_remote' depends on issues.jsonl being updated.
+            println!("Git pull failed (maybe no remote?): {}", e);
+            // Verify if we can proceed. If local repo only, maybe ok?
+            // But 'load_remote' depends on issues.jsonl being updated.
         }
 
         // 2. Load States
@@ -69,7 +69,12 @@ impl SyncEngine {
         let local = self.load_local()?;
         let remote = self.load_remote()?;
 
-        println!("Merging {} local, {} remote, {} base issues...", local.len(), remote.len(), base.len());
+        println!(
+            "Merging {} local, {} remote, {} base issues...",
+            local.len(),
+            remote.len(),
+            base.len()
+        );
 
         // 3. Merge
         let merged = self.merge(base, local, remote);
@@ -198,29 +203,29 @@ impl SyncEngine {
                 }
                 (Some(b_issue), Some(l_issue), Some(r_issue)) => {
                     // Modified in both?
-                     if l_issue.updated_at == r_issue.updated_at {
-                         // No conflict, or same timestamp
-                         merged.push(l_issue.clone());
-                     } else if l_issue.updated_at > b_issue.updated_at && r_issue.updated_at == b_issue.updated_at {
-                         // Local changed, Remote didn't
-                         merged.push(l_issue.clone());
-                     } else if r_issue.updated_at > b_issue.updated_at && l_issue.updated_at == b_issue.updated_at {
-                         // Remote changed, Local didn't
-                         merged.push(r_issue.clone());
-                     } else {
-                         // Both changed
-                         // LWW
-                         if l_issue.updated_at >= r_issue.updated_at {
-                             merged.push(l_issue.clone());
-                         } else {
-                             merged.push(r_issue.clone());
-                         }
-                     }
+                    if l_issue.updated_at == r_issue.updated_at {
+                        // No conflict, or same timestamp
+                        merged.push(l_issue.clone());
+                    } else if l_issue.updated_at > b_issue.updated_at && r_issue.updated_at == b_issue.updated_at {
+                        // Local changed, Remote didn't
+                        merged.push(l_issue.clone());
+                    } else if r_issue.updated_at > b_issue.updated_at && l_issue.updated_at == b_issue.updated_at {
+                        // Remote changed, Local didn't
+                        merged.push(r_issue.clone());
+                    } else {
+                        // Both changed
+                        // LWW
+                        if l_issue.updated_at >= r_issue.updated_at {
+                            merged.push(l_issue.clone());
+                        } else {
+                            merged.push(r_issue.clone());
+                        }
+                    }
                 }
-                 (None, None, None) => unreachable!(),
+                (None, None, None) => unreachable!(),
             }
         }
-        
+
         merged
     }
 
@@ -232,49 +237,49 @@ impl SyncEngine {
             merged_jsonl.push_str(&line);
             merged_jsonl.push('\n');
         }
-        
+
         // Step 1: Get all current DB IDs
         let current_issues = self.store.list_issues()?;
         let current_ids: HashSet<String> = current_issues.iter().map(|i| i.id.clone()).collect();
         let merged_ids: HashSet<String> = merged.iter().map(|i| i.id.clone()).collect();
-        
+
         // Step 2: Delete IDs not in merged
         for id in current_ids {
             if !merged_ids.contains(&id) {
                 self.store.delete_issue(&id)?;
             }
         }
-        
+
         // Step 3: Upsert merged issues
         if !merged.is_empty() {
-             crate::jsonl::import_from_jsonl(&mut self.store, std::io::Cursor::new(merged_jsonl.as_bytes()))?;
+            crate::jsonl::import_from_jsonl(&mut self.store, std::io::Cursor::new(merged_jsonl.as_bytes()))?;
         }
-        
+
         // 2. Write to issues.jsonl
         let issues_path = self.repo_path.join("issues.jsonl");
         let file = File::create(&issues_path)?;
         let mut writer = BufWriter::new(file);
-        
+
         // Move merged to sorted_merged
         let mut sorted_merged = merged;
         sorted_merged.sort_by(|a, b| a.id.cmp(&b.id));
-        
+
         for item in &sorted_merged {
-             serde_json::to_writer(&mut writer, item).map_err(crate::jsonl::JsonlError::from)?;
-             use std::io::Write;
-             writeln!(writer)?;
+            serde_json::to_writer(&mut writer, item).map_err(crate::jsonl::JsonlError::from)?;
+            use std::io::Write;
+            writeln!(writer)?;
         }
-        
+
         // 3. Write to sync_base.jsonl
         let base_path = self.repo_path.join("sync_base.jsonl");
         let file = File::create(&base_path)?;
         let mut writer = BufWriter::new(file);
         for item in &sorted_merged {
-             serde_json::to_writer(&mut writer, item).map_err(crate::jsonl::JsonlError::from)?;
-             use std::io::Write;
-             writeln!(writer)?;
+            serde_json::to_writer(&mut writer, item).map_err(crate::jsonl::JsonlError::from)?;
+            use std::io::Write;
+            writeln!(writer)?;
         }
-        
+
         Ok(())
     }
 }

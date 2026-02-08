@@ -57,5 +57,8 @@ fn test_tree_with_closed_parents() {
 
     // BUG: If this assertion FAILS, it means the structure is missing (flat list).
     // We expect the tree to PERSIST even if parent is closed, because `bl list` shows history.
-    assert!(tree_closed.contains("└──"), "Tree should STILL show structure when parent is CLOSED");
+    assert!(
+        tree_closed.contains("└──"),
+        "Tree should STILL show structure when parent is CLOSED"
+    );
 }
