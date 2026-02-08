@@ -125,9 +125,9 @@ impl Store {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
-                status: Status::from_str(&status_str).unwrap_or(Status::Open),
+                status: status_str.parse().unwrap_or(Status::Open),
                 priority: row.get(4)?,
-                issue_type: IssueType::from_str(&type_str).unwrap_or(IssueType::Task),
+                issue_type: type_str.parse().unwrap_or(IssueType::Task),
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
@@ -135,7 +135,7 @@ impl Store {
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
                 closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
-                resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                resolution: resolution_str.parse().unwrap_or(Resolution::None),
                 close_reason: row.get(10)?,
             })
         });
@@ -215,9 +215,9 @@ impl Store {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
-                status: Status::from_str(&status_str).unwrap_or(Status::Open),
+                status: status_str.parse().unwrap_or(Status::Open),
                 priority: row.get(4)?,
-                issue_type: IssueType::from_str(&type_str).unwrap_or(IssueType::Task),
+                issue_type: type_str.parse().unwrap_or(IssueType::Task),
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
@@ -225,7 +225,7 @@ impl Store {
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
                 closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
-                resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                resolution: resolution_str.parse().unwrap_or(Resolution::None),
                 close_reason: row.get(10)?,
             })
         })?;
@@ -282,7 +282,7 @@ impl Store {
             Ok(Dependency {
                 issue_id: row.get(0)?,
                 depends_on_id: row.get(1)?,
-                dep_type: DepType::from_str(&type_str).unwrap_or(DepType::Blocks),
+                dep_type: type_str.parse().unwrap_or(DepType::Blocks),
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
@@ -310,7 +310,7 @@ impl Store {
             Ok(Dependency {
                 issue_id: row.get(0)?,
                 depends_on_id: row.get(1)?,
-                dep_type: DepType::from_str(&type_str).unwrap_or(DepType::Blocks),
+                dep_type: type_str.parse().unwrap_or(DepType::Blocks),
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
@@ -356,9 +356,9 @@ impl Store {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
-                status: Status::from_str(&status_str).unwrap_or(Status::Open),
+                status: status_str.parse().unwrap_or(Status::Open),
                 priority: row.get(4)?,
-                issue_type: IssueType::from_str(&type_str).unwrap_or(IssueType::Task),
+                issue_type: type_str.parse().unwrap_or(IssueType::Task),
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
@@ -366,7 +366,7 @@ impl Store {
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
                 closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
-                resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                resolution: resolution_str.parse().unwrap_or(Resolution::None),
                 close_reason: None,
             })
         })?;
@@ -399,9 +399,9 @@ impl Store {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
-                status: Status::from_str(&status_str).unwrap_or(Status::Open),
+                status: status_str.parse().unwrap_or(Status::Open),
                 priority: row.get(4)?,
-                issue_type: IssueType::from_str(&type_str).unwrap_or(IssueType::Task),
+                issue_type: type_str.parse().unwrap_or(IssueType::Task),
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
@@ -409,7 +409,7 @@ impl Store {
                     .map(|t| t.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now()),
                 closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
-                resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                resolution: resolution_str.parse().unwrap_or(Resolution::None),
                 close_reason: row.get(10)?,
             })
         })?;
