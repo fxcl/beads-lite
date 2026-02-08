@@ -35,7 +35,7 @@ impl SyncEngine {
             .current_dir(&self.repo_path)
             .args(args)
             .status()
-            .map_err(|e| SyncError::Io(e))?;
+            .map_err(SyncError::Io)?;
 
         if status.success() {
             Ok(())
@@ -91,7 +91,7 @@ impl SyncEngine {
             .current_dir(&self.repo_path)
             .args(["diff", "--cached", "--quiet"])
             .status()
-            .map_err(|e| SyncError::Io(e))?;
+            .map_err(SyncError::Io)?;
 
         if !status.success() {
             self.git_exec(&["commit", "-m", "bl sync"])?;
