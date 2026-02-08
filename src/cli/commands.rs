@@ -261,11 +261,17 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
         Commands::Close { id, resolution, reason } => {
             let store = open_store()?;
             cmd_close(store, id, resolution, reason, writer)
-        },
-        Commands::Ready { json, tree, priority, r#type } => {
+        }
+        Commands::Ready {
+            json,
+            tree,
+            priority,
+            r#type,
+            limit,
+        } => {
             let store = open_store()?;
-            cmd_ready(store, json, tree, priority, r#type, writer)
-        },
+            cmd_ready(store, json, tree, priority, r#type, limit, writer)
+        }
         Commands::Export { file } => {
             let store = open_store()?;
             cmd_export(store, file, writer)
