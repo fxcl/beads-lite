@@ -1,6 +1,6 @@
 [package]
 name = "beads-lite"
-version = "0.0.1"
+version = "0.2.0"
 edition = "2021"
 description = "Minimal dependency-aware task tracker for coding agents"
 license = "MIT"
