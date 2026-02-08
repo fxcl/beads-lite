@@ -5,6 +5,7 @@ use crate::dependency::DepType;
 use crate::issue::{Issue, IssueType, Resolution, Status};
 use crate::jsonl::{export_to_file, export_to_jsonl, import_from_file};
 use crate::storage::Store;
+use crate::sync::SyncEngine;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::io::{self, Write};
@@ -156,6 +157,8 @@ pub enum Commands {
         /// Input file
         file: PathBuf,
     },
+    /// Synchronize issues with code
+    Sync,
     /// Print Claude Code integration instructions
     Onboard,
     /// Show version
@@ -202,7 +205,10 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             r#type,
             blocked_by,
             discovered_from,
-        } => cmd_create(title, description, priority, r#type, blocked_by, discovered_from, writer),
+        } => {
+             let store = open_store()?;
+             cmd_create(store, title, description, priority, r#type, blocked_by, discovered_from, writer)
+        },
         Commands::List {
             json,
             tree,
@@ -211,8 +217,14 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             r#type,
             resolution,
             blocked_by,
-        } => cmd_list(json, tree, status, priority, r#type, resolution, blocked_by, writer),
-        Commands::Show { id, json } => cmd_show(id, json, writer),
+        } => {
+            let store = open_store()?;
+            cmd_list(store, json, tree, status, priority, r#type, resolution, blocked_by, writer)
+        },
+        Commands::Show { id, json } => {
+            let store = open_store()?;
+            cmd_show(store, id, json, writer)
+        },
         Commands::Update {
             id,
             title,
@@ -223,12 +235,34 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             blocked_by,
             unblock,
             discovered_from,
-        } => cmd_update(id, title, status, priority, r#type, description, blocked_by, unblock, discovered_from, writer),
-        Commands::Delete { id, confirm } => cmd_delete(id, confirm, writer),
-        Commands::Close { id, resolution, reason } => cmd_close(id, resolution, reason, writer),
-        Commands::Ready { json, tree, priority, r#type } => cmd_ready(json, tree, priority, r#type, writer),
-        Commands::Export { file } => cmd_export(file, writer),
-        Commands::Import { file } => cmd_import(file, writer),
+        } => {
+            let store = open_store()?;
+            cmd_update(store, id, title, status, priority, r#type, description, blocked_by, unblock, discovered_from, writer)
+        },
+        Commands::Delete { id, confirm } => {
+            let store = open_store()?;
+            cmd_delete(store, id, confirm, writer)
+        },
+        Commands::Close { id, resolution, reason } => {
+            let store = open_store()?;
+            cmd_close(store, id, resolution, reason, writer)
+        },
+        Commands::Ready { json, tree, priority, r#type } => {
+            let store = open_store()?;
+            cmd_ready(store, json, tree, priority, r#type, writer)
+        },
+        Commands::Export { file } => {
+            let store = open_store()?;
+            cmd_export(store, file, writer)
+        },
+        Commands::Import { file } => {
+            let store = open_store()?;
+            cmd_import(store, &file, writer)
+        },
+        Commands::Sync => {
+            let store = open_store()?;
+            cmd_sync(store, writer)
+        },
         Commands::Onboard => cmd_onboard(writer),
         Commands::Version => cmd_version(writer),
         Commands::Upgrade => cmd_upgrade(writer),
@@ -249,6 +283,7 @@ Commands:
   ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
+  sync                  Synchronize issues with code
   onboard               Print Claude Code integration instructions
   version               Show version
   upgrade               Upgrade to latest release
@@ -304,6 +339,7 @@ fn cmd_init<W: Write>(writer: &mut W) -> Result<(), String> {
 }
 
 fn cmd_create<W: Write>(
+    store: Store,
     title: Vec<String>,
     description: Option<String>,
     priority: i32,
@@ -317,7 +353,7 @@ fn cmd_create<W: Write>(
     }
 
     let title = title.join(" ");
-    let store = open_store()?;
+    
 
     let mut issue = Issue::new(&title);
     issue.description = description.unwrap_or_default();
@@ -418,6 +454,7 @@ fn filter_issues(
 }
 
 fn cmd_list<W: Write>(
+    store: Store,
     json: bool,
     tree: bool,
     status: Option<String>,
@@ -428,7 +465,7 @@ fn cmd_list<W: Write>(
     writer: &mut W,
 ) -> Result<(), String> {
     validate_filters(&status, &priority, &issue_type, &resolution)?;
-    let store = open_store()?;
+    
 
     let issues = if let Some(blocker_id) = blocked_by {
         store.get_blocked_by(&blocker_id).map_err(|e| format!("failed to get blocked issues: {}", e))?
@@ -441,8 +478,8 @@ fn cmd_list<W: Write>(
     Ok(())
 }
 
-fn cmd_show<W: Write>(id: String, json: bool, writer: &mut W) -> Result<(), String> {
-    let store = open_store()?;
+fn cmd_show<W: Write>(store: Store, id: String, json: bool, writer: &mut W) -> Result<(), String> {
+    
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
 
     if json {
@@ -517,6 +554,7 @@ fn cmd_show<W: Write>(id: String, json: bool, writer: &mut W) -> Result<(), Stri
 }
 
 fn cmd_update<W: Write>(
+    store: Store,
     id: String,
     title: Option<String>,
     status: Option<String>,
@@ -528,7 +566,7 @@ fn cmd_update<W: Write>(
     discovered_from: Vec<String>,
     writer: &mut W,
 ) -> Result<(), String> {
-    let store = open_store()?;
+    
     let mut issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
 
     // Validate inputs
@@ -600,23 +638,23 @@ fn cmd_update<W: Write>(
     Ok(())
 }
 
-fn cmd_delete<W: Write>(id: String, confirm: bool, writer: &mut W) -> Result<(), String> {
+fn cmd_delete<W: Write>(store: Store, id: String, confirm: bool, writer: &mut W) -> Result<(), String> {
     if !confirm {
         return Err("delete requires --confirm flag".to_string());
     }
 
-    let store = open_store()?;
+    
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
     store.delete_issue(&id).map_err(|e| format!("failed to delete: {}", e))?;
     writeln!(writer, "Deleted {}: {}", id, issue.title).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-fn cmd_close<W: Write>(id: String, resolution: String, reason: Option<String>, writer: &mut W) -> Result<(), String> {
+fn cmd_close<W: Write>(store: Store, id: String, resolution: String, reason: Option<String>, writer: &mut W) -> Result<(), String> {
     let res = Resolution::from_str(&resolution)
         .ok_or_else(|| format!("invalid resolution: {} (must be done, wontfix, or duplicate)", resolution))?;
 
-    let store = open_store()?;
+    
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
     store.close_issue(&id, res, reason).map_err(|e| format!("failed to close: {}", e))?;
     writeln!(writer, "Closed {}: {}", id, issue.title).map_err(|e| e.to_string())?;
@@ -624,6 +662,7 @@ fn cmd_close<W: Write>(id: String, resolution: String, reason: Option<String>, w
 }
 
 fn cmd_ready<W: Write>(
+    store: Store,
     json: bool,
     tree: bool,
     priority: Option<i32>,
@@ -631,15 +670,15 @@ fn cmd_ready<W: Write>(
     writer: &mut W,
 ) -> Result<(), String> {
     validate_filters(&None, &priority, &issue_type, &None)?;
-    let store = open_store()?;
+    
     let issues = store.get_ready_work().map_err(|e| format!("failed to get ready work: {}", e))?;
     let issues = filter_issues(issues, &None, &priority, &issue_type, &None);
     output_issues(&store, &issues, writer, json, tree).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-fn cmd_export<W: Write>(file: Option<PathBuf>, writer: &mut W) -> Result<(), String> {
-    let store = open_store()?;
+fn cmd_export<W: Write>(store: Store, file: Option<PathBuf>, writer: &mut W) -> Result<(), String> {
+    
 
     if let Some(path) = file {
         export_to_file(&store, &path).map_err(|e| format!("export failed: {}", e))?;
@@ -650,11 +689,27 @@ fn cmd_export<W: Write>(file: Option<PathBuf>, writer: &mut W) -> Result<(), Str
     Ok(())
 }
 
-fn cmd_import<W: Write>(file: PathBuf, writer: &mut W) -> Result<(), String> {
-    let mut store = open_store()?;
-    let stats = import_from_file(&mut store, &file).map_err(|e| format!("import failed: {}", e))?;
+fn cmd_import<W: Write>(mut store: Store, file: &PathBuf, writer: &mut W) -> Result<(), String> {
+    let stats = import_from_file(&mut store, file).map_err(|e| format!("import failed: {}", e))?;
     writeln!(writer, "Imported: {} created, {} updated", stats.created, stats.updated)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn cmd_sync<W: Write>(store: Store, writer: &mut W) -> Result<(), String> {
+    // Current directory is assumed to be the repo root or inside it
+    let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
+    // We could try to find the git root, but for now assuming cwd is ok or using store's path
+    // Store path is usually .beads-lite/beads.db
+    // So the repo root is the parent of .beads-lite
+    let repo_path = cwd; 
+    
+    let mut engine = SyncEngine::new(store, repo_path);
+    if let Err(e) = engine.run() {
+        writeln!(writer, "Sync failed: {}", e).map_err(|e| e.to_string())?;
+        return Err("Sync failed".to_string());
+    }
+    writeln!(writer, "Sync completed successfully.").map_err(|e| e.to_string())?;
     Ok(())
 }
 

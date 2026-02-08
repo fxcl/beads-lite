@@ -26,7 +26,7 @@ pub enum JsonlError {
 pub type Result<T> = std::result::Result<T, JsonlError>;
 
 /// IssueExport represents an issue with embedded dependencies for JSONL export.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IssueExport {
     pub id: String,
     pub title: String,
@@ -52,7 +52,7 @@ fn is_empty_resolution(r: &Resolution) -> bool {
 }
 
 /// DependencyExport represents a dependency relationship for JSONL export.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DependencyExport {
     pub depends_on: String,
     #[serde(rename = "type")]
