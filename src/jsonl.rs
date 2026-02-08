@@ -42,6 +42,8 @@ pub struct IssueExport {
     pub closed_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "is_empty_resolution")]
     pub resolution: Resolution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_reason: Option<String>,
     pub dependencies: Vec<DependencyExport>,
 }
 
@@ -77,6 +79,7 @@ pub fn to_issue_export(issue: &Issue, deps: &[Dependency]) -> IssueExport {
         updated_at: issue.updated_at,
         closed_at: issue.closed_at,
         resolution: issue.resolution.clone(),
+        close_reason: issue.close_reason.clone(),
         dependencies: deps
             .iter()
             .map(|d| DependencyExport {
@@ -158,6 +161,7 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
                 updated_at: export.updated_at,
                 closed_at: export.closed_at,
                 resolution: export.resolution.clone(),
+                close_reason: export.close_reason.clone(),
             };
 
             // Check if issue exists
@@ -169,8 +173,8 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
                 conn.execute(
                     r#"
                     UPDATE issues SET title = ?1, description = ?2, status = ?3, priority = ?4,
-                    issue_type = ?5, updated_at = ?6, closed_at = ?7, resolution = ?8
-                    WHERE id = ?9
+                    issue_type = ?5, updated_at = ?6, closed_at = ?7, resolution = ?8, close_reason = ?9
+                    WHERE id = ?10
                     "#,
                     rusqlite::params![
                         issue.title,
@@ -181,6 +185,7 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
                         issue.updated_at.to_rfc3339(),
                         issue.closed_at.map(|t| t.to_rfc3339()),
                         issue.resolution.as_str(),
+                        issue.close_reason,
                         issue.id,
                     ],
                 )
@@ -189,8 +194,8 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
             } else {
                 conn.execute(
                     r#"
-                    INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, resolution)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, resolution, close_reason)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                     "#,
                     rusqlite::params![
                         issue.id,
@@ -203,6 +208,7 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
                         issue.updated_at.to_rfc3339(),
                         issue.closed_at.map(|t| t.to_rfc3339()),
                         issue.resolution.as_str(),
+                        issue.close_reason,
                     ],
                 )
                 .map_err(|e| StoreError::Validation(format!("line {}: {}", line_num, e)))?;

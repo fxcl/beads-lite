@@ -71,6 +71,10 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
             "#,
         )?;
+
+        // Migration: Add close_reason if it doesn't exist
+        let _ = self.conn.execute("ALTER TABLE issues ADD COLUMN close_reason TEXT", []);
+
         Ok(())
     }
 
@@ -80,8 +84,8 @@ impl Store {
 
         self.conn.execute(
             r#"
-            INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, resolution)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, resolution, close_reason)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
             params![
                 issue.id,
@@ -94,6 +98,7 @@ impl Store {
                 issue.updated_at.to_rfc3339(),
                 issue.closed_at.map(|t| t.to_rfc3339()),
                 issue.resolution.as_str(),
+                issue.close_reason,
             ],
         )?;
         Ok(())
@@ -103,7 +108,7 @@ impl Store {
     pub fn get_issue(&self, id: &str) -> Result<Issue> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, '')
+            SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, ''), close_reason
             FROM issues WHERE id = ?1
             "#,
         )?;
@@ -135,6 +140,7 @@ impl Store {
                         .ok()
                 }),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                close_reason: row.get(10)?,
             })
         });
 
@@ -153,8 +159,8 @@ impl Store {
         self.conn.execute(
             r#"
             UPDATE issues SET title = ?1, description = ?2, status = ?3, priority = ?4,
-            issue_type = ?5, updated_at = ?6, closed_at = ?7, resolution = ?8
-            WHERE id = ?9
+            issue_type = ?5, updated_at = ?6, closed_at = ?7, resolution = ?8, close_reason = ?9
+            WHERE id = ?10
             "#,
             params![
                 issue.title,
@@ -165,25 +171,27 @@ impl Store {
                 updated_at.to_rfc3339(),
                 issue.closed_at.map(|t| t.to_rfc3339()),
                 issue.resolution.as_str(),
+                issue.close_reason,
                 issue.id,
             ],
         )?;
         Ok(())
     }
 
-    /// Closes an issue with the given resolution.
-    pub fn close_issue(&self, id: &str, resolution: Resolution) -> Result<()> {
+    /// Closes an issue with the given resolution and optional reason.
+    pub fn close_issue(&self, id: &str, resolution: Resolution, reason: Option<String>) -> Result<()> {
         let now = Utc::now();
         self.conn.execute(
             r#"
-            UPDATE issues SET status = ?1, updated_at = ?2, closed_at = ?3, resolution = ?4
-            WHERE id = ?5
+            UPDATE issues SET status = ?1, updated_at = ?2, closed_at = ?3, resolution = ?4, close_reason = ?5
+            WHERE id = ?6
             "#,
             params![
                 Status::Closed.as_str(),
                 now.to_rfc3339(),
                 now.to_rfc3339(),
                 resolution.as_str(),
+                reason,
                 id,
             ],
         )?;
@@ -194,7 +202,7 @@ impl Store {
     pub fn list_issues(&self) -> Result<Vec<Issue>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, '')
+            SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, ''), close_reason
             FROM issues ORDER BY priority ASC, created_at ASC
             "#,
         )?;
@@ -226,6 +234,7 @@ impl Store {
                         .ok()
                 }),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                close_reason: row.get(10)?,
             })
         })?;
 
@@ -377,6 +386,54 @@ impl Store {
                         .ok()
                 }),
                 resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                close_reason: None,
+            })
+        })?;
+
+        issues.collect::<std::result::Result<Vec<_>, _>>().map_err(StoreError::Database)
+    }
+
+    /// Returns issues that are blocked by the given issue ID.
+    pub fn get_blocked_by(&self, blocker_id: &str) -> Result<Vec<Issue>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
+                   i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, ''), i.close_reason
+            FROM issues i
+            JOIN dependencies d ON i.id = d.issue_id
+            WHERE d.depends_on_id = ?1 AND d.type = 'blocks'
+            ORDER BY i.priority ASC, i.created_at ASC
+            "#,
+        )?;
+
+        let issues = stmt.query_map(params![blocker_id], |row| {
+            let status_str: String = row.get(3)?;
+            let type_str: String = row.get(5)?;
+            let created_str: String = row.get(6)?;
+            let updated_str: String = row.get(7)?;
+            let closed_str: Option<String> = row.get(8)?;
+            let resolution_str: String = row.get(9)?;
+
+            Ok(Issue {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: Status::from_str(&status_str).unwrap_or(Status::Open),
+                priority: row.get(4)?,
+                issue_type: IssueType::from_str(&type_str).unwrap_or(IssueType::Task),
+                created_at: DateTime::parse_from_rfc3339(&created_str)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: DateTime::parse_from_rfc3339(&updated_str)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                closed_at: closed_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|t| t.with_timezone(&Utc))
+                        .ok()
+                }),
+                resolution: Resolution::from_str(&resolution_str).unwrap_or(Resolution::None),
+                close_reason: row.get(10)?,
             })
         })?;
 
@@ -473,7 +530,7 @@ mod tests {
         store.add_dependency(&issue_b.id, &issue_a.id, DepType::Blocks).unwrap();
 
         // Close A
-        store.close_issue(&issue_a.id, Resolution::Done).unwrap();
+        store.close_issue(&issue_a.id, Resolution::Done, None).unwrap();
 
         // Now B should be ready
         let ready = store.get_ready_work().unwrap();

@@ -71,6 +71,9 @@ pub enum Commands {
         /// Filter by resolution
         #[arg(long)]
         resolution: Option<String>,
+        /// Filter by blocker (issue ID)
+        #[arg(long = "blocked-by")]
+        blocked_by: Option<String>,
     },
     /// Show issue details
     Show {
@@ -124,6 +127,9 @@ pub enum Commands {
         /// Resolution (done, wontfix, duplicate)
         #[arg(long, default_value = "done")]
         resolution: String,
+        /// Reason for closing
+        #[arg(long)]
+        reason: Option<String>,
     },
     /// List unblocked work
     Ready {
@@ -204,7 +210,8 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             priority,
             r#type,
             resolution,
-        } => cmd_list(json, tree, status, priority, r#type, resolution, writer),
+            blocked_by,
+        } => cmd_list(json, tree, status, priority, r#type, resolution, blocked_by, writer),
         Commands::Show { id, json } => cmd_show(id, json, writer),
         Commands::Update {
             id,
@@ -218,7 +225,7 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             discovered_from,
         } => cmd_update(id, title, status, priority, r#type, description, blocked_by, unblock, discovered_from, writer),
         Commands::Delete { id, confirm } => cmd_delete(id, confirm, writer),
-        Commands::Close { id, resolution } => cmd_close(id, resolution, writer),
+        Commands::Close { id, resolution, reason } => cmd_close(id, resolution, reason, writer),
         Commands::Ready { json, tree, priority, r#type } => cmd_ready(json, tree, priority, r#type, writer),
         Commands::Export { file } => cmd_export(file, writer),
         Commands::Import { file } => cmd_import(file, writer),
@@ -254,7 +261,9 @@ List/Ready Flags:
 
 List-Only Flags:
   --status <string>     Filter by status (open, in_progress, closed)
+  --status <string>     Filter by status (open, in_progress, closed)
   --resolution <string> Filter by resolution (done, wontfix, duplicate)
+  --blocked-by <id>     Filter by blocker (issues blocked by <id>)
 
 Show Flags:
   --json                Output as JSON
@@ -278,6 +287,7 @@ Update Flags:
 
 Close Flags:
   --resolution <string> Resolution (done, wontfix, duplicate), default done
+  --reason <text>       Reason for closing
 
 Delete Flags:
   --confirm             Required to confirm permanent deletion"#);
@@ -414,11 +424,18 @@ fn cmd_list<W: Write>(
     priority: Option<i32>,
     issue_type: Option<String>,
     resolution: Option<String>,
+    blocked_by: Option<String>,
     writer: &mut W,
 ) -> Result<(), String> {
     validate_filters(&status, &priority, &issue_type, &resolution)?;
     let store = open_store()?;
-    let issues = store.list_issues().map_err(|e| format!("failed to list issues: {}", e))?;
+
+    let issues = if let Some(blocker_id) = blocked_by {
+        store.get_blocked_by(&blocker_id).map_err(|e| format!("failed to get blocked issues: {}", e))?
+    } else {
+        store.list_issues().map_err(|e| format!("failed to list issues: {}", e))?
+    };
+
     let issues = filter_issues(issues, &status, &priority, &issue_type, &resolution);
     output_issues(&store, &issues, writer, json, tree).map_err(|e| e.to_string())?;
     Ok(())
@@ -452,6 +469,9 @@ fn cmd_show<W: Write>(id: String, json: bool, writer: &mut W) -> Result<(), Stri
     }
     if !matches!(issue.resolution, Resolution::None) {
         writeln!(writer, "Resolution: {}", issue.resolution).map_err(|e| e.to_string())?;
+    }
+    if let Some(reason) = &issue.close_reason {
+        writeln!(writer, "Close Reason: {}", reason).map_err(|e| e.to_string())?;
     }
 
     // Show dependencies, grouped by type
@@ -592,13 +612,13 @@ fn cmd_delete<W: Write>(id: String, confirm: bool, writer: &mut W) -> Result<(),
     Ok(())
 }
 
-fn cmd_close<W: Write>(id: String, resolution: String, writer: &mut W) -> Result<(), String> {
+fn cmd_close<W: Write>(id: String, resolution: String, reason: Option<String>, writer: &mut W) -> Result<(), String> {
     let res = Resolution::from_str(&resolution)
         .ok_or_else(|| format!("invalid resolution: {} (must be done, wontfix, or duplicate)", resolution))?;
 
     let store = open_store()?;
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
-    store.close_issue(&id, res).map_err(|e| format!("failed to close: {}", e))?;
+    store.close_issue(&id, res, reason).map_err(|e| format!("failed to close: {}", e))?;
     writeln!(writer, "Closed {}: {}", id, issue.title).map_err(|e| e.to_string())?;
     Ok(())
 }

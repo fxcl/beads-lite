@@ -148,6 +148,8 @@ pub struct Issue {
     pub closed_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "is_empty_resolution")]
     pub resolution: Resolution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_reason: Option<String>,
 }
 
 fn is_empty_resolution(r: &Resolution) -> bool {
@@ -172,6 +174,7 @@ impl Issue {
             updated_at: now,
             closed_at: None,
             resolution: Resolution::None,
+            close_reason: None,
         }
     }
 
