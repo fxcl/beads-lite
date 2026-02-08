@@ -146,6 +146,9 @@ pub enum Commands {
         /// Filter by type
         #[arg(long)]
         r#type: Option<String>,
+        /// Limit number of results
+        #[arg(short = 'n', long)]
+        limit: Option<usize>,
     },
     /// Export all issues to JSONL
     Export {
@@ -258,16 +261,11 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
         Commands::Close { id, resolution, reason } => {
             let store = open_store()?;
             cmd_close(store, id, resolution, reason, writer)
-        }
-        Commands::Ready {
-            json,
-            tree,
-            priority,
-            r#type,
-        } => {
+        },
+        Commands::Ready { json, tree, priority, r#type } => {
             let store = open_store()?;
             cmd_ready(store, json, tree, priority, r#type, writer)
-        }
+        },
         Commands::Export { file } => {
             let store = open_store()?;
             cmd_export(store, file, writer)
@@ -689,12 +687,18 @@ fn cmd_ready<W: Write>(
     tree: bool,
     priority: Option<i32>,
     issue_type: Option<String>,
+    limit: Option<usize>,
     writer: &mut W,
 ) -> Result<(), String> {
     validate_filters(&None, &priority, &issue_type, &None)?;
 
     let issues = store.get_ready_work().map_err(|e| format!("failed to get ready work: {}", e))?;
-    let issues = filter_issues(issues, &None, &priority, &issue_type, &None);
+    let mut issues = filter_issues(issues, &None, &priority, &issue_type, &None);
+
+    if let Some(n) = limit {
+        issues.truncate(n);
+    }
+
     output_issues(&store, &issues, writer, json, tree).map_err(|e| e.to_string())?;
     Ok(())
 }
