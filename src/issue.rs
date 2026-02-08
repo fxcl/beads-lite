@@ -16,21 +16,25 @@ pub enum Status {
     Closed,
 }
 
+impl std::str::FromStr for Status {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "open" => Ok(Status::Open),
+            "in_progress" => Ok(Status::InProgress),
+            "closed" => Ok(Status::Closed),
+            _ => Err(()),
+        }
+    }
+}
+
 impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Open => "open",
             Status::InProgress => "in_progress",
             Status::Closed => "closed",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "open" => Some(Status::Open),
-            "in_progress" => Some(Status::InProgress),
-            "closed" => Some(Status::Closed),
-            _ => None,
         }
     }
 }
@@ -51,6 +55,20 @@ pub enum IssueType {
     Epic,
 }
 
+impl std::str::FromStr for IssueType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "task" => Ok(IssueType::Task),
+            "bug" => Ok(IssueType::Bug),
+            "feature" => Ok(IssueType::Feature),
+            "epic" => Ok(IssueType::Epic),
+            _ => Err(()),
+        }
+    }
+}
+
 impl IssueType {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -58,16 +76,6 @@ impl IssueType {
             IssueType::Bug => "bug",
             IssueType::Feature => "feature",
             IssueType::Epic => "epic",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "task" => Some(IssueType::Task),
-            "bug" => Some(IssueType::Bug),
-            "feature" => Some(IssueType::Feature),
-            "epic" => Some(IssueType::Epic),
-            _ => None,
         }
     }
 }
@@ -90,6 +98,20 @@ pub enum Resolution {
     Duplicate,
 }
 
+impl std::str::FromStr for Resolution {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "" => Ok(Resolution::None),
+            "done" => Ok(Resolution::Done),
+            "wontfix" => Ok(Resolution::Wontfix),
+            "duplicate" => Ok(Resolution::Duplicate),
+            _ => Err(()),
+        }
+    }
+}
+
 impl Resolution {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -97,16 +119,6 @@ impl Resolution {
             Resolution::Done => "done",
             Resolution::Wontfix => "wontfix",
             Resolution::Duplicate => "duplicate",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "" => Some(Resolution::None),
-            "done" => Some(Resolution::Done),
-            "wontfix" => Some(Resolution::Wontfix),
-            "duplicate" => Some(Resolution::Duplicate),
-            _ => None,
         }
     }
 }
@@ -269,9 +281,9 @@ mod tests {
 
     #[test]
     fn test_status_from_str() {
-        assert_eq!(Status::from_str("open"), Some(Status::Open));
-        assert_eq!(Status::from_str("in_progress"), Some(Status::InProgress));
-        assert_eq!(Status::from_str("closed"), Some(Status::Closed));
-        assert_eq!(Status::from_str("invalid"), None);
+        assert_eq!("open".parse::<Status>(), Ok(Status::Open));
+        assert_eq!("in_progress".parse::<Status>(), Ok(Status::InProgress));
+        assert_eq!("closed".parse::<Status>(), Ok(Status::Closed));
+        assert!("invalid".parse::<Status>().is_err());
     }
 }

@@ -13,19 +13,23 @@ pub enum DepType {
     DiscoveredFrom,
 }
 
+impl std::str::FromStr for DepType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "blocks" => Ok(DepType::Blocks),
+            "discovered_from" | "discovered-from" => Ok(DepType::DiscoveredFrom),
+            _ => Err(()),
+        }
+    }
+}
+
 impl DepType {
     pub fn as_str(&self) -> &'static str {
         match self {
             DepType::Blocks => "blocks",
             DepType::DiscoveredFrom => "discovered_from",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "blocks" => Some(DepType::Blocks),
-            "discovered_from" | "discovered-from" => Some(DepType::DiscoveredFrom),
-            _ => None,
         }
     }
 }
@@ -120,9 +124,9 @@ mod tests {
 
     #[test]
     fn test_dep_type_from_str() {
-        assert_eq!(DepType::from_str("blocks"), Some(DepType::Blocks));
-        assert_eq!(DepType::from_str("discovered_from"), Some(DepType::DiscoveredFrom));
-        assert_eq!(DepType::from_str("discovered-from"), Some(DepType::DiscoveredFrom));
-        assert_eq!(DepType::from_str("invalid"), None);
+        assert_eq!("blocks".parse::<DepType>(), Ok(DepType::Blocks));
+        assert_eq!("discovered_from".parse::<DepType>(), Ok(DepType::DiscoveredFrom));
+        assert_eq!("discovered-from".parse::<DepType>(), Ok(DepType::DiscoveredFrom));
+        assert!("invalid".parse::<DepType>().is_err());
     }
 }

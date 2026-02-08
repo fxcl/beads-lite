@@ -365,6 +365,7 @@ fn cmd_init<W: Write>(writer: &mut W) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_create<W: Write>(
     store: Store,
     title: Vec<String>,
@@ -384,8 +385,9 @@ fn cmd_create<W: Write>(
     let mut issue = Issue::new(&title);
     issue.description = description.unwrap_or_default();
     issue.priority = priority;
-    issue.issue_type =
-        IssueType::from_str(&issue_type).ok_or_else(|| format!("invalid type: {} (valid: task, bug, feature, epic)", issue_type))?;
+    issue.issue_type = issue_type
+        .parse::<IssueType>()
+        .map_err(|_| format!("invalid type: {} (valid: task, bug, feature, epic)", issue_type))?;
 
     store.create_issue(&issue).map_err(|e| format!("failed to create issue: {}", e))?;
 
@@ -426,22 +428,22 @@ fn validate_filters(
     resolution: &Option<String>,
 ) -> Result<(), String> {
     if let Some(s) = status {
-        if Status::from_str(s).is_none() {
+        if s.parse::<Status>().is_err() {
             return Err(format!("invalid status: {} (valid: open, in_progress, closed)", s));
         }
     }
     if let Some(p) = priority {
-        if *p < 0 || *p > 4 {
+        if !(*p >= 0 && *p <= 4) {
             return Err(format!("invalid priority: {} (valid: 0-4)", p));
         }
     }
     if let Some(t) = issue_type {
-        if IssueType::from_str(t).is_none() {
+        if t.parse::<IssueType>().is_err() {
             return Err(format!("invalid type: {} (valid: task, bug, feature, epic)", t));
         }
     }
     if let Some(r) = resolution {
-        if Resolution::from_str(r).is_none() {
+        if r.parse::<Resolution>().is_err() {
             return Err(format!("invalid resolution: {} (valid: done, wontfix, duplicate)", r));
         }
     }
@@ -483,6 +485,7 @@ fn filter_issues(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_list<W: Write>(
     store: Store,
     json: bool,
@@ -578,6 +581,7 @@ fn cmd_show<W: Write>(store: Store, id: String, json: bool, writer: &mut W) -> R
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_update<W: Write>(
     store: Store,
     id: String,
@@ -595,17 +599,17 @@ fn cmd_update<W: Write>(
 
     // Validate inputs
     if let Some(ref s) = status {
-        if Status::from_str(s).is_none() {
+        if s.parse::<Status>().is_err() {
             return Err(format!("invalid status: {} (valid: open, in_progress, closed)", s));
         }
     }
     if let Some(p) = priority {
-        if p < 0 || p > 4 {
+        if !(0..=4).contains(&p) {
             return Err(format!("invalid priority: {} (valid: 0-4)", p));
         }
     }
     if let Some(ref t) = issue_type {
-        if IssueType::from_str(t).is_none() {
+        if t.parse::<IssueType>().is_err() {
             return Err(format!("invalid type: {} (valid: task, bug, feature, epic)", t));
         }
     }
@@ -615,13 +619,13 @@ fn cmd_update<W: Write>(
         issue.title = t;
     }
     if let Some(s) = status {
-        issue.status = Status::from_str(&s).unwrap();
+        issue.status = s.parse().unwrap();
     }
     if let Some(p) = priority {
         issue.priority = p;
     }
     if let Some(t) = issue_type {
-        issue.issue_type = IssueType::from_str(&t).unwrap();
+        issue.issue_type = t.parse().unwrap();
     }
     if let Some(d) = description {
         issue.description = d;
@@ -678,8 +682,9 @@ fn cmd_delete<W: Write>(store: Store, id: String, confirm: bool, writer: &mut W)
 }
 
 fn cmd_close<W: Write>(store: Store, id: String, resolution: String, reason: Option<String>, writer: &mut W) -> Result<(), String> {
-    let res = Resolution::from_str(&resolution)
-        .ok_or_else(|| format!("invalid resolution: {} (must be done, wontfix, or duplicate)", resolution))?;
+    let res = resolution
+        .parse::<Resolution>()
+        .map_err(|_| format!("invalid resolution: {} (must be done, wontfix, or duplicate)", resolution))?;
 
     let issue = store.get_issue(&id).map_err(|e| format!("issue {}: {}", id, e))?;
     store.close_issue(&id, res, reason).map_err(|e| format!("failed to close: {}", e))?;

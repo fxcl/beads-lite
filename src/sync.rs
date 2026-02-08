@@ -89,7 +89,7 @@ impl SyncEngine {
         // Check for changes
         let status = std::process::Command::new("git")
             .current_dir(&self.repo_path)
-            .args(&["diff", "--cached", "--quiet"])
+            .args(["diff", "--cached", "--quiet"])
             .status()
             .map_err(|e| SyncError::Io(e))?;
 

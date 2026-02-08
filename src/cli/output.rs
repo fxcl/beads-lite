@@ -42,7 +42,7 @@ fn output_issues_json<W: Write>(store: &Store, issues: &[Issue], writer: &mut W)
     for issue in issues {
         let deps = all_deps.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
         let export = to_issue_export(issue, deps);
-        serde_json::to_writer(&mut *writer, &export).map_err(|e| std::io::Error::other(e))?;
+        serde_json::to_writer(&mut *writer, &export).map_err(std::io::Error::other)?;
         writeln!(writer)?;
     }
     Ok(())
@@ -116,7 +116,7 @@ fn print_tree<W: Write>(writer: &mut W, children: &HashMap<&str, Vec<&Issue>>, p
 /// Outputs a single issue as JSON.
 pub fn output_single_issue_json<W: Write>(issue: &Issue, deps: &[Dependency], writer: &mut W) -> std::io::Result<()> {
     let export = to_issue_export(issue, deps);
-    serde_json::to_writer(&mut *writer, &export).map_err(|e| std::io::Error::other(e))?;
+    serde_json::to_writer(&mut *writer, &export).map_err(std::io::Error::other)?;
     writeln!(writer)?;
     Ok(())
 }
