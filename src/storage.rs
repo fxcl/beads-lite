@@ -147,6 +147,50 @@ impl Store {
         }
     }
 
+    /// Retrieves an issue by its key (title prefix starting with "[key]").
+    pub fn get_issue_by_key(&self, key: &str) -> Result<Issue> {
+        let pattern = format!("[{}]%", key);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, ''), close_reason
+            FROM issues WHERE title LIKE ?1 ORDER BY created_at DESC LIMIT 1
+            "#,
+        )?;
+
+        let issue = stmt.query_row(params![pattern], |row| {
+            let status_str: String = row.get(3)?;
+            let type_str: String = row.get(5)?;
+            let created_str: String = row.get(6)?;
+            let updated_str: String = row.get(7)?;
+            let closed_str: Option<String> = row.get(8)?;
+            let resolution_str: String = row.get(9)?;
+
+            Ok(Issue {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: status_str.parse().unwrap_or(Status::Open),
+                priority: row.get(4)?,
+                issue_type: type_str.parse().unwrap_or(IssueType::Task),
+                created_at: DateTime::parse_from_rfc3339(&created_str)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: DateTime::parse_from_rfc3339(&updated_str)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                closed_at: closed_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).ok()),
+                resolution: resolution_str.parse().unwrap_or(Resolution::None),
+                close_reason: row.get(10)?,
+            })
+        });
+
+        match issue {
+            Ok(i) => Ok(i),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::IssueNotFound),
+            Err(e) => Err(StoreError::Database(e)),
+        }
+    }
+
     /// Updates an existing issue.
     pub fn update_issue(&self, issue: &Issue) -> Result<()> {
         issue.validate().map_err(|e| StoreError::Validation(e.to_string()))?;

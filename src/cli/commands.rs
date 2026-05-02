@@ -34,6 +34,9 @@ pub enum Commands {
     Init,
     /// Create a new issue, prints ID
     Create {
+        /// Issue key to prepend to the title (e.g., [key])
+        #[arg(long)]
+        key: Option<String>,
         /// Issue title
         title: Vec<String>,
         /// Issue description
@@ -79,7 +82,11 @@ pub enum Commands {
     /// Show issue details
     Show {
         /// Issue ID
-        id: String,
+        #[arg(required_unless_present = "key", conflicts_with = "key")]
+        id: Option<String>,
+        /// Issue key (alternative to ID, prefix in brackets)
+        #[arg(long, conflicts_with = "id")]
+        key: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -87,7 +94,11 @@ pub enum Commands {
     /// Update an issue
     Update {
         /// Issue ID
-        id: String,
+        #[arg(required_unless_present = "key", conflicts_with = "key")]
+        id: Option<String>,
+        /// Issue key (alternative to ID, prefix in brackets)
+        #[arg(long, conflicts_with = "id")]
+        key: Option<String>,
         /// New title
         #[arg(long)]
         title: Option<String>,
@@ -116,7 +127,11 @@ pub enum Commands {
     /// Delete an issue permanently
     Delete {
         /// Issue ID
-        id: String,
+        #[arg(required_unless_present = "key", conflicts_with = "key")]
+        id: Option<String>,
+        /// Issue key (alternative to ID, prefix in brackets)
+        #[arg(long, conflicts_with = "id")]
+        key: Option<String>,
         /// Confirm deletion
         #[arg(long)]
         confirm: bool,
@@ -124,7 +139,11 @@ pub enum Commands {
     /// Close an issue
     Close {
         /// Issue ID
-        id: String,
+        #[arg(required_unless_present = "key", conflicts_with = "key")]
+        id: Option<String>,
+        /// Issue key (alternative to ID, prefix in brackets)
+        #[arg(long, conflicts_with = "id")]
+        key: Option<String>,
         /// Resolution (done, wontfix, duplicate)
         #[arg(long, default_value = "done")]
         resolution: String,
@@ -174,6 +193,17 @@ fn get_db_path() -> PathBuf {
     PathBuf::from(BEADS_DIR).join(DB_NAME)
 }
 
+fn resolve_id(store: &Store, id: Option<String>, key: Option<String>) -> Result<String, String> {
+    if let Some(id) = id {
+        Ok(id)
+    } else if let Some(key) = key {
+        let issue = store.get_issue_by_key(&key).map_err(|e| format!("key {}: {}", key, e))?;
+        Ok(issue.id)
+    } else {
+        Err("either id or --key must be provided".to_string())
+    }
+}
+
 fn open_store() -> Result<Store, String> {
     let db_path = get_db_path();
     if !db_path.exists() {
@@ -202,6 +232,7 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
     match cmd {
         Commands::Init => cmd_init(writer),
         Commands::Create {
+            key,
             title,
             description,
             priority,
@@ -209,8 +240,12 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             blocked_by,
             discovered_from,
         } => {
+            let mut final_title = title.clone();
+            if let Some(k) = key {
+                final_title.insert(0, format!("[{}]", k));
+            }
             let store = open_store()?;
-            cmd_create(store, title, description, priority, r#type, blocked_by, discovered_from, writer)
+            cmd_create(store, final_title, description, priority, r#type, blocked_by, discovered_from, writer)
         }
         Commands::List {
             json,
@@ -224,12 +259,14 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             let store = open_store()?;
             cmd_list(store, json, tree, status, priority, r#type, resolution, blocked_by, writer)
         }
-        Commands::Show { id, json } => {
+        Commands::Show { id, key, json } => {
             let store = open_store()?;
-            cmd_show(store, id, json, writer)
+            let resolved_id = resolve_id(&store, id, key)?;
+            cmd_show(store, resolved_id, json, writer)
         }
         Commands::Update {
             id,
+            key,
             title,
             status,
             priority,
@@ -240,9 +277,10 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             discovered_from,
         } => {
             let store = open_store()?;
+            let resolved_id = resolve_id(&store, id, key)?;
             cmd_update(
                 store,
-                id,
+                resolved_id,
                 title,
                 status,
                 priority,
@@ -254,13 +292,15 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
                 writer,
             )
         }
-        Commands::Delete { id, confirm } => {
+        Commands::Delete { id, key, confirm } => {
             let store = open_store()?;
-            cmd_delete(store, id, confirm, writer)
+            let resolved_id = resolve_id(&store, id, key)?;
+            cmd_delete(store, resolved_id, confirm, writer)
         }
-        Commands::Close { id, resolution, reason } => {
+        Commands::Close { id, key, resolution, reason } => {
             let store = open_store()?;
-            cmd_close(store, id, resolution, reason, writer)
+            let resolved_id = resolve_id(&store, id, key)?;
+            cmd_close(store, resolved_id, resolution, reason, writer)
         }
         Commands::Ready {
             json,
@@ -299,10 +339,10 @@ Commands:
   init                  Initialize .beads-lite/ directory and database
   create <title>        Create a new issue, prints ID
   list                  List all issues
-  show <id>             Show issue details
-  update <id>           Update an issue (including blockers)
-  delete <id>           Delete an issue permanently (requires --confirm)
-  close <id>            Close an issue
+  show <id|--key>       Show issue details
+  update <id|--key>     Update an issue (including blockers)
+  delete <id|--key>     Delete an issue permanently (requires --confirm)
+  close <id|--key>      Close an issue
   ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
@@ -327,6 +367,7 @@ Show Flags:
   --json                Output as JSON
 
 Create Flags:
+  --key <string>        Issue key to prepend to title (e.g., [key])
   --description <text>  Issue description
   --priority <int>      Priority (0-4), default 2
   --type <string>       Type (task, bug, feature, epic), default task
