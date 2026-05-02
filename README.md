@@ -30,6 +30,23 @@ bl close <tests-id>
 bl ready                                        # now "Deploy" shows
 ```
 
+### Key-based Workflow
+
+Instead of relying on generated IDs, you can define and use semantic keys. This creates a much smoother workflow for LLM agents:
+
+```bash
+# 1. Create a task with a specific key
+bl create --key auth-api "Implement Auth API"
+# The title will automatically be saved as: "[auth-api] Implement Auth API"
+
+# 2. Operate on the task using the key instead of the ID
+bl show --key auth-api
+bl update --key auth-api --status in_progress
+bl close --key auth-api --resolution done
+```
+
+Any command that accepts an `<id>` also accepts `--key <key>` as an alternative.
+
 ### Task Origin Tracking
 
 Use `--discovered-from` to track where a task was discovered:
@@ -55,10 +72,10 @@ Commands:
   init                  Initialize .beads-lite/ directory and database
   create <title>        Create a new issue, prints ID
   list                  List all issues
-  show <id>             Show issue details
-  update <id>           Update an issue (including blockers)
-  delete <id>           Delete an issue permanently (requires --confirm)
-  close <id>            Close an issue
+  show <id|--key>       Show issue details
+  update <id|--key>     Update an issue (including blockers)
+  delete <id|--key>     Delete an issue permanently (requires --confirm)
+  close <id|--key>      Close an issue
   ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
@@ -80,6 +97,7 @@ Show Flags:
   --json                Output as JSON
 
 Create Flags:
+  --key <string>        Issue key to prepend to title (e.g., [key])
   --description <text>  Issue description
   --priority <int>      Priority (0-4), default 2
   --type <string>       Type (task, bug, feature, epic), default task
