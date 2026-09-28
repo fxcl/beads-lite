@@ -1,6 +1,7 @@
 {"id":"bl-47qe","title":"Bug in auth handler","description":"Found during impl","status":"open","priority":2,"issue_type":"bug","created_at":"2026-02-08T14:47:34.229092Z","updated_at":"2026-02-08T14:47:34.229092Z","dependencies":[]}
 {"id":"bl-4qqk","title":"Bug in auth handler","description":"Found during  impl","status":"open","priority":2,"issue_type":"bug","created_at":"2026-02-08T14:53:26.025411Z","updated_at":"2026-02-08T14:53:26.033105Z","dependencies":[]}
 {"id":"bl-4sdy","title":"[test-key] Testing something","status":"in_progress","priority":2,"issue_type":"task","created_at":"2026-05-02T04:33:23.416303Z","updated_at":"2026-05-02T04:33:33.097429Z","dependencies":[]}
+{"id":"bl-7qco","title":"Probe","status":"open","priority":2,"issue_type":"task","created_at":"2026-09-28T09:50:14.076713Z","updated_at":"2026-09-28T09:50:14.076713Z","dependencies":[]}
 {"id":"bl-9hj3","title":"Bug in auth handler","description":"Found during impl","status":"open","priority":2,"issue_type":"bug","created_at":"2026-02-08T14:46:32.139197Z","updated_at":"2026-02-08T14:46:32.139197Z","dependencies":[]}
 {"id":"bl-9qru","title":"Bug in auth handler","description":"Found during impl","status":"open","priority":2,"issue_type":"bug","created_at":"2026-02-08T14:47:38.131464Z","updated_at":"2026-02-08T14:47:38.131464Z","dependencies":[]}
 {"id":"bl-ac09","title":"Task B","status":"open","priority":2,"issue_type":"task","created_at":"2026-02-08T13:59:41.022395Z","updated_at":"2026-02-08T13:59:41.022395Z","dependencies":[{"depends_on":"bl-ideh","type":"blocks"}]}
