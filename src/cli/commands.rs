@@ -200,6 +200,13 @@ pub enum Commands {
         /// Read commit message from stdin
         #[arg(long, conflicts_with = "message")]
         stdin: bool,
+        /// Dry run — report whether a commit would produce changes; do not
+        /// export, add, or commit. Exit 0 if clean, non-zero if dirty.
+        #[arg(long)]
+        check: bool,
+        /// Output check result as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Print Claude Code integration instructions
     Onboard,
@@ -358,9 +365,14 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             let store = open_store()?;
             cmd_sync(store, attempts, no_push, json, writer)
         }
-        Commands::Commit { message, stdin } => {
+        Commands::Commit {
+            message,
+            stdin,
+            check,
+            json,
+        } => {
             let store = open_store()?;
-            cmd_commit(store, message, stdin, writer)
+            cmd_commit(store, message, stdin, check, json, writer)
         }
         Commands::Onboard => cmd_onboard(writer),
         Commands::Version => cmd_version(writer),
@@ -397,7 +409,9 @@ Sync Flags:
 
 Commit Flags:
   -m, --message <msg>   Commit message (default: "bl commit")
-  --stdin               Read commit message from stdin"
+  --stdin               Read commit message from stdin
+  --check               Dry run — report whether a commit would change anything (exit 0=clean, 1=dirty)
+  --json                Output check result as JSON"
 
 List/Ready Flags:
   --json                Output as JSONL (one JSON object per line)
@@ -856,9 +870,20 @@ fn cmd_sync<W: Write>(store: Store, attempts: u32, no_push: bool, json: bool, wr
     std::process::exit(code);
 }
 
-fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, writer: &mut W) -> Result<(), String> {
+fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, check: bool, json: bool, writer: &mut W) -> Result<(), String> {
     if stdin && message.is_some() {
         return Err("--stdin and -m are mutually exclusive".to_string());
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
+
+    if !git::is_repository(&cwd) {
+        return Err(format!("not a git repository: {}", cwd.display()));
+    }
+
+    // --check: dry run, never export or commit.
+    if check {
+        return cmd_commit_check(&store, &cwd, json, writer);
     }
 
     let msg = if stdin {
@@ -875,12 +900,6 @@ fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, writ
         return Err("commit message cannot be empty".to_string());
     }
 
-    let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
-
-    if !git::is_repository(&cwd) {
-        return Err(format!("not a git repository: {}", cwd.display()));
-    }
-
     let issues_path = cwd.join("issues.jsonl");
     export_to_file(&store, &issues_path).map_err(|e| format!("export failed: {}", e))?;
 
@@ -893,6 +912,58 @@ fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, writ
         .map_err(|e| e.to_string()),
         false => writeln!(writer, "No changes to commit").map_err(|e| e.to_string()),
     }
+}
+
+fn cmd_commit_check<W: Write>(store: &Store, repo: &std::path::Path, json: bool, writer: &mut W) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    // Export DB to memory buffer (never touches disk, no side effects).
+    let mut buf = Vec::new();
+    crate::jsonl::export_to_jsonl(store, &mut buf).map_err(|e| format!("export failed: {}", e))?;
+
+    let head = git::head_file(repo, "issues.jsonl").unwrap_or_default();
+    let dirty = buf != head.as_bytes();
+
+    // changed_issues = symmetric difference of IDs between current DB
+    // and HEAD. Captures new + deleted issues (modified without ID change
+    // is not counted, but is still surfaced via `dirty: true`).
+    let changed_issues = if dirty {
+        let parse_ids = |s: &str| -> HashSet<String> {
+            s.lines()
+                .filter(|l| !l.trim().is_empty())
+                .filter_map(|l| serde_json::from_str::<crate::jsonl::IssueExport>(l).ok())
+                .map(|e| e.id)
+                .collect()
+        };
+        let local_ids = parse_ids(&String::from_utf8_lossy(&buf));
+        let head_ids = parse_ids(&head);
+        local_ids.symmetric_difference(&head_ids).count()
+    } else {
+        0
+    };
+
+    if json {
+        let out = serde_json::json!({
+            "dirty": dirty,
+            "changedIssues": changed_issues,
+            "paths": if dirty { serde_json::json!(["issues.jsonl"]) } else { serde_json::json!([]) },
+        });
+        let line = serde_json::to_string(&out).map_err(|e| format!("json encode failed: {}", e))?;
+        writeln!(writer, "{}", line).map_err(|e| e.to_string())?;
+    } else if dirty {
+        writeln!(
+            writer,
+            "would commit ({} issue{} differ from HEAD)",
+            changed_issues,
+            if changed_issues == 1 { "" } else { "s" }
+        )
+        .map_err(|e| e.to_string())?;
+        writeln!(writer, "  issues.jsonl").map_err(|e| e.to_string())?;
+    } else {
+        writeln!(writer, "clean").map_err(|e| e.to_string())?;
+    }
+
+    std::process::exit(if dirty { 1 } else { 0 });
 }
 
 fn cmd_onboard<W: Write>(writer: &mut W) -> Result<(), String> {

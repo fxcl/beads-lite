@@ -64,6 +64,21 @@ pub fn is_repository(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns the contents of `<path>` at HEAD, or `None` if the file is not
+/// tracked at HEAD (or any other non-fatal `git show` failure).
+pub fn head_file(repo: &Path, path: &str) -> Option<String> {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(["show", &format!("HEAD:{}", path)])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        None
+    }
+}
+
 /// Returns true if `git diff --cached` is non-empty (i.e., there are staged
 /// changes ready to commit).
 pub fn has_staged_changes(repo: &Path) -> Result<bool, GitError> {
