@@ -2,13 +2,14 @@
 
 use crate::cli::output::{output_issues, output_single_issue_json};
 use crate::dependency::DepType;
+use crate::git;
 use crate::issue::{Issue, IssueType, Resolution, Status};
 use crate::jsonl::{export_to_file, export_to_jsonl, import_from_file};
 use crate::storage::Store;
 use crate::sync::SyncEngine;
 use clap::{Parser, Subcommand};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 const BEADS_DIR: &str = ".beads-lite";
@@ -180,7 +181,26 @@ pub enum Commands {
         file: PathBuf,
     },
     /// Synchronize issues with code
-    Sync,
+    Sync {
+        /// Maximum pull/push attempts before reporting retry exhaustion (exit 3)
+        #[arg(long, default_value_t = 3)]
+        attempts: u32,
+        /// Skip git push (pull + merge + commit still run)
+        #[arg(long)]
+        no_push: bool,
+        /// Output the SyncOutcome as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export current issues to JSONL and git commit (no push)
+    Commit {
+        /// Commit message (default: "bl commit")
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// Read commit message from stdin
+        #[arg(long, conflicts_with = "message")]
+        stdin: bool,
+    },
     /// Print Claude Code integration instructions
     Onboard,
     /// Show version
@@ -245,7 +265,16 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
                 final_title.insert(0, format!("[{}]", k));
             }
             let store = open_store()?;
-            cmd_create(store, final_title, description, priority, r#type, blocked_by, discovered_from, writer)
+            cmd_create(
+                store,
+                final_title,
+                description,
+                priority,
+                r#type,
+                blocked_by,
+                discovered_from,
+                writer,
+            )
         }
         Commands::List {
             json,
@@ -297,7 +326,12 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             let resolved_id = resolve_id(&store, id, key)?;
             cmd_delete(store, resolved_id, confirm, writer)
         }
-        Commands::Close { id, key, resolution, reason } => {
+        Commands::Close {
+            id,
+            key,
+            resolution,
+            reason,
+        } => {
             let store = open_store()?;
             let resolved_id = resolve_id(&store, id, key)?;
             cmd_close(store, resolved_id, resolution, reason, writer)
@@ -320,9 +354,13 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             let store = open_store()?;
             cmd_import(store, &file, writer)
         }
-        Commands::Sync => {
+        Commands::Sync { attempts, no_push, json } => {
             let store = open_store()?;
-            cmd_sync(store, writer)
+            cmd_sync(store, attempts, no_push, json, writer)
+        }
+        Commands::Commit { message, stdin } => {
+            let store = open_store()?;
+            cmd_commit(store, message, stdin, writer)
         }
         Commands::Onboard => cmd_onboard(writer),
         Commands::Version => cmd_version(writer),
@@ -346,10 +384,20 @@ Commands:
   ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
-  sync                  Synchronize issues with code
+  sync                  Synchronize issues with code (exit 0/2/3/4)
+  commit                Export JSONL snapshot and git commit (no push)
   onboard               Print Claude Code integration instructions
   version               Show version
   upgrade               Upgrade to latest release
+
+Sync Flags:
+  --attempts <N>        Max push/pull attempts before exit 3 (default 3)
+  --no-push             Skip git push (pull + merge + commit still execute)
+  --json                Output SyncOutcome as JSON
+
+Commit Flags:
+  -m, --message <msg>   Commit message (default: "bl commit")
+  --stdin               Read commit message from stdin"
 
 List/Ready Flags:
   --json                Output as JSONL (one JSON object per line)
@@ -771,21 +819,80 @@ fn cmd_import<W: Write>(mut store: Store, file: &PathBuf, writer: &mut W) -> Res
     Ok(())
 }
 
-fn cmd_sync<W: Write>(store: Store, writer: &mut W) -> Result<(), String> {
-    // Current directory is assumed to be the repo root or inside it
+fn cmd_sync<W: Write>(store: Store, attempts: u32, no_push: bool, json: bool, writer: &mut W) -> Result<(), String> {
+    use crate::sync::SyncStatus;
+
     let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
-    // We could try to find the git root, but for now assuming cwd is ok or using store's path
-    // Store path is usually .beads-lite/beads.db
-    // So the repo root is the parent of .beads-lite
     let repo_path = cwd;
 
-    let mut engine = SyncEngine::new(store, repo_path);
-    if let Err(e) = engine.run() {
-        writeln!(writer, "Sync failed: {}", e).map_err(|e| e.to_string())?;
-        return Err("Sync failed".to_string());
+    let mut engine = SyncEngine::new(store, repo_path).with_options(attempts, no_push);
+    let outcome = match engine.run() {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            writeln!(writer, "Sync failed: {}", e).map_err(|e| e.to_string())?;
+            return Err("Sync failed".to_string());
+        }
+    };
+
+    if json {
+        let line = serde_json::to_string(&outcome).map_err(|e| format!("json encode failed: {}", e))?;
+        writeln!(writer, "{}", line).map_err(|e| e.to_string())?;
+    } else {
+        writeln!(writer, "Sync completed: status={:?}", outcome.status).map_err(|e| e.to_string())?;
+        if !outcome.pushed && !outcome.push_skipped {
+            if let Some(err) = &outcome.last_error {
+                writeln!(writer, "  last error: {}", err).map_err(|e| e.to_string())?;
+            }
+        }
     }
-    writeln!(writer, "Sync completed successfully.").map_err(|e| e.to_string())?;
-    Ok(())
+
+    // Map SyncStatus → process exit code (upstream parity: 0/2/3/4).
+    let code: i32 = match outcome.status {
+        SyncStatus::Ok => 0,
+        SyncStatus::Conflict => 2,
+        SyncStatus::RetriesExhausted => 3,
+        SyncStatus::NoRemote => 0,
+    };
+    std::process::exit(code);
+}
+
+fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, writer: &mut W) -> Result<(), String> {
+    if stdin && message.is_some() {
+        return Err("--stdin and -m are mutually exclusive".to_string());
+    }
+
+    let msg = if stdin {
+        let mut s = String::new();
+        io::stdin()
+            .read_to_string(&mut s)
+            .map_err(|e| format!("failed to read stdin: {}", e))?;
+        s.trim().to_string()
+    } else {
+        message.unwrap_or_else(|| "bl commit".to_string())
+    };
+
+    if msg.is_empty() {
+        return Err("commit message cannot be empty".to_string());
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
+
+    if !git::is_repository(&cwd) {
+        return Err(format!("not a git repository: {}", cwd.display()));
+    }
+
+    let issues_path = cwd.join("issues.jsonl");
+    export_to_file(&store, &issues_path).map_err(|e| format!("export failed: {}", e))?;
+
+    match git::commit_snapshot(&cwd, &["issues.jsonl"], &msg).map_err(|e| format!("git commit failed: {}", e))? {
+        true => writeln!(
+            writer,
+            "Committed snapshot of {} issues",
+            store.list_issues().map_err(|e| e.to_string())?.len()
+        )
+        .map_err(|e| e.to_string()),
+        false => writeln!(writer, "No changes to commit").map_err(|e| e.to_string()),
+    }
 }
 
 fn cmd_onboard<W: Write>(writer: &mut W) -> Result<(), String> {

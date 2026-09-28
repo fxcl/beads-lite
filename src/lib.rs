@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod dependency;
+pub mod git;
 pub mod issue;
 pub mod jsonl;
 pub mod storage;

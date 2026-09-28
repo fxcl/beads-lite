@@ -1,5 +1,7 @@
+use crate::git::{self, GitError, PushOutcome};
 use crate::jsonl::{self, IssueExport};
 use crate::storage::Store;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
@@ -15,99 +17,122 @@ pub enum SyncError {
     #[error("Store error: {0}")]
     Store(#[from] crate::storage::StoreError),
     #[error("Git error: {0}")]
-    Git(String),
+    Git(#[from] GitError),
 }
 
 pub type Result<T> = std::result::Result<T, SyncError>;
 
+/// Exit-code mapping mirrors upstream `bd sync`:
+/// 0 = ok, 2 = conflict (auto-merged via LWW but with diverged modifies),
+/// 3 = retries exhausted (push race), 4 = dirty-stuck (reserved for future).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SyncStatus {
+    Ok,
+    Conflict,
+    RetriesExhausted,
+    NoRemote,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncOutcome {
+    pub status: SyncStatus,
+    pub attempts: u32,
+    pub pulled: bool,
+    pub pushed: bool,
+    pub push_skipped: bool,
+    pub merged_issues: usize,
+    pub conflict_count: usize,
+    pub last_error: Option<String>,
+}
+
 pub struct SyncEngine {
     store: Store,
     repo_path: PathBuf,
+    /// Maximum push-pull attempts before returning RetriesExhausted.
+    pub attempts: u32,
+    /// If true, run pull + merge + commit but skip `git push`.
+    pub no_push: bool,
 }
 
 impl SyncEngine {
     pub fn new(store: Store, repo_path: PathBuf) -> Self {
-        Self { store, repo_path }
+        Self {
+            store,
+            repo_path,
+            attempts: 3,
+            no_push: false,
+        }
     }
 
-    fn git_exec(&self, args: &[&str]) -> Result<()> {
-        let status = std::process::Command::new("git")
-            .current_dir(&self.repo_path)
-            .args(args)
-            .status()
-            .map_err(SyncError::Io)?;
+    pub fn with_options(mut self, attempts: u32, no_push: bool) -> Self {
+        self.attempts = attempts.max(1);
+        self.no_push = no_push;
+        self
+    }
 
-        if status.success() {
-            Ok(())
+    pub fn run(&mut self) -> Result<SyncOutcome> {
+        let mut outcome = SyncOutcome {
+            status: SyncStatus::Ok,
+            attempts: 0,
+            pulled: false,
+            pushed: false,
+            push_skipped: self.no_push,
+            merged_issues: 0,
+            conflict_count: 0,
+            last_error: None,
+        };
+
+        // 1. Pull
+        if let Err(e) = git::run(&self.repo_path, &["pull", "--rebase"]) {
+            // Upstream treats pull failure as transient; record and continue.
+            // Local-only repos will hit this — that's expected, not an error.
+            outcome.last_error = Some(format!("pull: {}", e));
         } else {
-            // Check if failure is due to 'nothing to commit' or similar non-error states if needed
-            // But for pull/push failure, we should error.
-            Err(SyncError::Git(format!("git {:?} failed", args)))
-        }
-    }
-
-    pub fn run(&mut self) -> Result<()> {
-        println!("Syncing...");
-
-        // 1. Git Pull (Rebase)
-        println!("Pulling remote changes...");
-        // This might fail if no remote or unrelated histories, but let's try.
-        // We use --rebase to fetch and replay local commits on top of upstream.
-        // But for our jsonl files, we want to just fetch and merge manually.
-        // So maybe just 'git fetch' then 'git checkout origin/main -- issues.jsonl'?
-        // No, 'bl sync' assumes full repo sync.
-
-        // Let's use 'git pull --rebase' for simplicity now.
-        if let Err(e) = self.git_exec(&["pull", "--rebase"]) {
-            println!("Git pull failed (maybe no remote?): {}", e);
-            // Verify if we can proceed. If local repo only, maybe ok?
-            // But 'load_remote' depends on issues.jsonl being updated.
+            outcome.pulled = true;
         }
 
-        // 2. Load States
+        // 2. Load states
         let base = self.load_base()?;
         let local = self.load_local()?;
         let remote = self.load_remote()?;
 
-        println!(
-            "Merging {} local, {} remote, {} base issues...",
-            local.len(),
-            remote.len(),
-            base.len()
-        );
+        // 3. Merge (collect conflict count, then merge)
+        let (merged, conflict_count) = self.merge(base, local, remote);
+        outcome.merged_issues = merged.len();
+        outcome.conflict_count = conflict_count;
 
-        // 3. Merge
-        let merged = self.merge(base, local, remote);
-
-        // 4. Apply Changes
-        self.apply_changes(merged)?;
-
-        // 5. Git Commit & Push
-        println!("Committing and pushing changes...");
-        self.git_exec(&["add", "issues.jsonl", "sync_base.jsonl"])?;
-
-        // Check for changes
-        let status = std::process::Command::new("git")
-            .current_dir(&self.repo_path)
-            .args(["diff", "--cached", "--quiet"])
-            .status()
-            .map_err(SyncError::Io)?;
-
-        if !status.success() {
-            self.git_exec(&["commit", "-m", "bl sync"])?;
-            if let Err(e) = self.git_exec(&["push"]) {
-                println!("Git push failed: {}", e);
-            } else {
-                println!("Synced successfully.");
-            }
-        } else {
-            println!("No changes to push.");
+        if conflict_count > 0 {
+            outcome.status = SyncStatus::Conflict;
         }
 
-        Ok(())
+        // 4. Apply changes
+        self.apply_changes(merged)?;
+
+        // 5. Commit
+        git::run(&self.repo_path, &["add", "--", "issues.jsonl", "sync_base.jsonl"])?;
+        if git::has_staged_changes(&self.repo_path)? {
+            git::commit_snapshot(&self.repo_path, &["issues.jsonl", "sync_base.jsonl"], "bl sync")?;
+        }
+
+        // 6. Push (with retry)
+        if self.no_push {
+            // skipped — already recorded push_skipped=true
+        } else {
+            match git::push_with_retry(&self.repo_path, self.attempts) {
+                Ok(PushOutcome::Pushed) => outcome.pushed = true,
+                Ok(PushOutcome::Skipped) => outcome.push_skipped = true,
+                Err(GitError::PushRace { attempts, .. }) => {
+                    outcome.attempts = attempts;
+                    outcome.status = SyncStatus::RetriesExhausted;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(outcome)
     }
 
-    /// Loads the base state from sync_base.jsonl
     fn load_base(&self) -> Result<HashMap<String, IssueExport>> {
         let path = self.repo_path.join("sync_base.jsonl");
         if !path.exists() {
@@ -116,7 +141,6 @@ impl SyncEngine {
         self.load_issues_from_file(&path)
     }
 
-    /// Loads the remote state from issues.jsonl
     fn load_remote(&self) -> Result<HashMap<String, IssueExport>> {
         let path = self.repo_path.join("issues.jsonl");
         if !path.exists() {
@@ -125,7 +149,6 @@ impl SyncEngine {
         self.load_issues_from_file(&path)
     }
 
-    /// Loads the local state from the database
     fn load_local(&self) -> Result<HashMap<String, IssueExport>> {
         let issues = self.store.list_issues()?;
         let all_deps = self.store.get_all_dependencies()?;
@@ -144,7 +167,6 @@ impl SyncEngine {
         let reader = BufReader::new(file);
         let mut map = HashMap::new();
 
-        // We can reuse import_from_jsonl logic but we just want to parse into struct
         for line in std::io::BufRead::lines(reader) {
             let line = line?;
             if line.trim().is_empty() {
@@ -156,15 +178,16 @@ impl SyncEngine {
         Ok(map)
     }
 
-    /// 3-way merge logic
-    /// Returns the merged state as a list of IssueExport
+    /// 3-way merge logic. Returns merged state plus count of diverged-modify
+    /// conflicts (auto-resolved via LWW per upstream semantics).
     pub fn merge(
         &self,
         base: HashMap<String, IssueExport>,
         local: HashMap<String, IssueExport>,
         remote: HashMap<String, IssueExport>,
-    ) -> Vec<IssueExport> {
+    ) -> (Vec<IssueExport>, usize) {
         let mut merged = Vec::new();
+        let mut conflicts = 0;
         let mut all_ids: HashSet<String> = HashSet::new();
         all_ids.extend(base.keys().cloned());
         all_ids.extend(local.keys().cloned());
@@ -176,45 +199,37 @@ impl SyncEngine {
             let r = remote.get(&id);
 
             match (b, l, r) {
-                (None, Some(l_issue), None) => merged.push(l_issue.clone()), // Local add
-                (None, None, Some(r_issue)) => merged.push(r_issue.clone()), // Remote add
+                (None, Some(l_issue), None) => merged.push(l_issue.clone()),
+                (None, None, Some(r_issue)) => merged.push(r_issue.clone()),
                 (None, Some(l_issue), Some(r_issue)) => {
-                    // Added in both concurrently
                     if l_issue.updated_at >= r_issue.updated_at {
                         merged.push(l_issue.clone());
                     } else {
                         merged.push(r_issue.clone());
                     }
                 }
-                (Some(_), None, None) => {} // Deleted in local and remote
+                (Some(_), None, None) => {}
                 (Some(b_issue), None, Some(r_issue)) => {
-                    // Local deleted, Remote kept
-                    // If Remote modified it, keep Remote (resurrect). Else delete.
                     if r_issue.updated_at > b_issue.updated_at {
                         merged.push(r_issue.clone());
                     }
                 }
                 (Some(b_issue), Some(l_issue), None) => {
-                    // Remote deleted, Local kept
-                    // If Local modified it, keep Local (resurrect). Else delete.
                     if l_issue.updated_at > b_issue.updated_at {
                         merged.push(l_issue.clone());
                     }
                 }
                 (Some(b_issue), Some(l_issue), Some(r_issue)) => {
-                    // Modified in both?
-                    if l_issue.updated_at == r_issue.updated_at {
-                        // No conflict, or same timestamp
-                        merged.push(l_issue.clone());
-                    } else if l_issue.updated_at > b_issue.updated_at && r_issue.updated_at == b_issue.updated_at {
-                        // Local changed, Remote didn't
+                    if l_issue.updated_at == r_issue.updated_at
+                        || (l_issue.updated_at > b_issue.updated_at && r_issue.updated_at == b_issue.updated_at)
+                    {
                         merged.push(l_issue.clone());
                     } else if r_issue.updated_at > b_issue.updated_at && l_issue.updated_at == b_issue.updated_at {
-                        // Remote changed, Local didn't
                         merged.push(r_issue.clone());
                     } else {
-                        // Both changed
-                        // LWW
+                        // Both changed divergently — count as conflict,
+                        // auto-resolve via LWW.
+                        conflicts += 1;
                         if l_issue.updated_at >= r_issue.updated_at {
                             merged.push(l_issue.clone());
                         } else {
@@ -226,11 +241,10 @@ impl SyncEngine {
             }
         }
 
-        merged
+        (merged, conflicts)
     }
 
     pub fn apply_changes(&mut self, merged: Vec<IssueExport>) -> Result<()> {
-        // 1. Update DB (store)
         let mut merged_jsonl = String::new();
         for item in &merged {
             let line = serde_json::to_string(item).map_err(crate::jsonl::JsonlError::from)?;
@@ -238,39 +252,32 @@ impl SyncEngine {
             merged_jsonl.push('\n');
         }
 
-        // Step 1: Get all current DB IDs
         let current_issues = self.store.list_issues()?;
         let current_ids: HashSet<String> = current_issues.iter().map(|i| i.id.clone()).collect();
         let merged_ids: HashSet<String> = merged.iter().map(|i| i.id.clone()).collect();
 
-        // Step 2: Delete IDs not in merged
         for id in current_ids {
             if !merged_ids.contains(&id) {
                 self.store.delete_issue(&id)?;
             }
         }
 
-        // Step 3: Upsert merged issues
         if !merged.is_empty() {
             crate::jsonl::import_from_jsonl(&mut self.store, std::io::Cursor::new(merged_jsonl.as_bytes()))?;
         }
 
-        // 2. Write to issues.jsonl
-        let issues_path = self.repo_path.join("issues.jsonl");
-        let file = File::create(&issues_path)?;
-        let mut writer = BufWriter::new(file);
-
-        // Move merged to sorted_merged
         let mut sorted_merged = merged;
         sorted_merged.sort_by(|a, b| a.id.cmp(&b.id));
 
+        let issues_path = self.repo_path.join("issues.jsonl");
+        let file = File::create(&issues_path)?;
+        let mut writer = BufWriter::new(file);
         for item in &sorted_merged {
             serde_json::to_writer(&mut writer, item).map_err(crate::jsonl::JsonlError::from)?;
             use std::io::Write;
             writeln!(writer)?;
         }
 
-        // 3. Write to sync_base.jsonl
         let base_path = self.repo_path.join("sync_base.jsonl");
         let file = File::create(&base_path)?;
         let mut writer = BufWriter::new(file);
