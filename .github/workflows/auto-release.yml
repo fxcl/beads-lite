@@ -45,11 +45,25 @@ jobs:
           LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           echo "Latest tag: $LATEST"
 
-          # Parse version components
+          # Strip leading 'v' and tolerate malformed tags like "v.1.0".
           VERSION=${LATEST#v}
-          MAJOR=$(echo $VERSION | cut -d. -f1)
-          MINOR=$(echo $VERSION | cut -d. -f2)
-          PATCH=$(echo $VERSION | cut -d. -f3)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$LATEST" ]; then
+            VERSION="0.0.0"
+          fi
+          # If VERSION starts with '.', the major component is empty — prepend 0.
+          case "$VERSION" in
+            .*) VERSION="0${VERSION}" ;;
+          esac
+
+          # Parse version components
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Default missing fields to 0
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
 
           # Bump appropriate component
           case "${{ steps.bump.outputs.type }}" in
