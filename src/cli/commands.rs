@@ -211,6 +211,14 @@ pub enum Commands {
         /// Output the SyncOutcome as JSON
         #[arg(long)]
         json: bool,
+        /// Read-only dirty check vs HEAD. No pull, no merge, no commit, no push.
+        /// Exit 0 if clean, non-zero if dirty. Designed for pre-push hooks.
+        #[arg(long, conflicts_with_all = ["flush_only"])]
+        status: bool,
+        /// Export + commit only; skip pull and push. Use after a successful
+        /// --status check to flush local changes without touching the remote.
+        #[arg(long, conflicts_with_all = ["status"])]
+        flush_only: bool,
     },
     /// Export current issues to JSONL and git commit (no push)
     Commit {
@@ -392,9 +400,15 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
             let store = open_store()?;
             cmd_comment(store, id, text, stdin, file, author, json, writer)
         }
-        Commands::Sync { attempts, no_push, json } => {
+        Commands::Sync {
+            attempts,
+            no_push,
+            json,
+            status,
+            flush_only,
+        } => {
             let store = open_store()?;
-            cmd_sync(store, attempts, no_push, json, writer)
+            cmd_sync(store, attempts, no_push, json, status, flush_only, writer)
         }
         Commands::Commit {
             message,
@@ -864,11 +878,29 @@ fn cmd_import<W: Write>(mut store: Store, file: &PathBuf, writer: &mut W) -> Res
     Ok(())
 }
 
-fn cmd_sync<W: Write>(store: Store, attempts: u32, no_push: bool, json: bool, writer: &mut W) -> Result<(), String> {
+fn cmd_sync<W: Write>(
+    store: Store,
+    attempts: u32,
+    no_push: bool,
+    json: bool,
+    status: bool,
+    flush_only: bool,
+    writer: &mut W,
+) -> Result<(), String> {
     use crate::sync::SyncStatus;
 
     let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
     let repo_path = cwd;
+
+    // Short-circuit: --status is a read-only dry-run.
+    if status {
+        return cmd_sync_status(&store, &repo_path, json, writer);
+    }
+
+    // Short-circuit: --flush-only exports + commits, no pull, no push.
+    if flush_only {
+        return cmd_sync_flush_only(&store, &repo_path, writer);
+    }
 
     let mut engine = SyncEngine::new(store, repo_path).with_options(attempts, no_push);
     let outcome = match engine.run() {
@@ -899,6 +931,54 @@ fn cmd_sync<W: Write>(store: Store, attempts: u32, no_push: bool, json: bool, wr
         SyncStatus::NoRemote => 0,
     };
     std::process::exit(code);
+}
+
+/// `bl sync --status` — read-only dirty check, no side effects.
+/// Mirrors `bl commit --check`: exit 0 clean, exit 1 dirty.
+fn cmd_sync_status<W: Write>(store: &Store, repo: &std::path::Path, json: bool, writer: &mut W) -> Result<(), String> {
+    if !git::is_repository(repo) {
+        return Err(format!("not a git repository: {}", repo.display()));
+    }
+    let check = crate::jsonl::dirty_check(store, repo).map_err(|e| format!("dirty check: {}", e))?;
+    if json {
+        let out = serde_json::json!({
+            "clean": !check.dirty,
+            "dirty": check.dirty,
+            "changedIssues": check.changed_issues,
+            "paths": check.paths,
+        });
+        let line = serde_json::to_string(&out).map_err(|e| format!("json encode failed: {}", e))?;
+        writeln!(writer, "{}", line).map_err(|e| e.to_string())?;
+    } else if check.dirty {
+        writeln!(
+            writer,
+            "dirty: {} issue{} differ from HEAD",
+            check.changed_issues,
+            if check.changed_issues == 1 { "" } else { "s" }
+        )
+        .map_err(|e| e.to_string())?;
+        for p in &check.paths {
+            writeln!(writer, "  {}", p).map_err(|e| e.to_string())?;
+        }
+    } else {
+        writeln!(writer, "clean").map_err(|e| e.to_string())?;
+    }
+    std::process::exit(if check.dirty { 1 } else { 0 });
+}
+
+/// `bl sync --flush-only` — export + commit (message: "bl sync"), skip pull + push.
+/// Idempotent: no changes → no commit (exit 0).
+fn cmd_sync_flush_only<W: Write>(store: &Store, repo: &std::path::Path, writer: &mut W) -> Result<(), String> {
+    if !git::is_repository(repo) {
+        return Err(format!("not a git repository: {}", repo.display()));
+    }
+    let issues_path = repo.join("issues.jsonl");
+    export_to_file(store, &issues_path).map_err(|e| format!("export failed: {}", e))?;
+    match git::commit_snapshot(repo, &["issues.jsonl"], "bl sync").map_err(|e| format!("git commit failed: {}", e))? {
+        true => writeln!(writer, "Flushed local changes").map_err(|e| e.to_string())?,
+        false => writeln!(writer, "No changes").map_err(|e| e.to_string())?,
+    }
+    Ok(())
 }
 
 fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, check: bool, json: bool, writer: &mut W) -> Result<(), String> {
@@ -946,55 +1026,32 @@ fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, chec
 }
 
 fn cmd_commit_check<W: Write>(store: &Store, repo: &std::path::Path, json: bool, writer: &mut W) -> Result<(), String> {
-    use std::collections::HashSet;
-
-    // Export DB to memory buffer (never touches disk, no side effects).
-    let mut buf = Vec::new();
-    crate::jsonl::export_to_jsonl(store, &mut buf).map_err(|e| format!("export failed: {}", e))?;
-
-    let head = git::head_file(repo, "issues.jsonl").unwrap_or_default();
-    let dirty = buf != head.as_bytes();
-
-    // changed_issues = symmetric difference of IDs between current DB
-    // and HEAD. Captures new + deleted issues (modified without ID change
-    // is not counted, but is still surfaced via `dirty: true`).
-    let changed_issues = if dirty {
-        let parse_ids = |s: &str| -> HashSet<String> {
-            s.lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter_map(|l| serde_json::from_str::<crate::jsonl::IssueExport>(l).ok())
-                .map(|e| e.id)
-                .collect()
-        };
-        let local_ids = parse_ids(&String::from_utf8_lossy(&buf));
-        let head_ids = parse_ids(&head);
-        local_ids.symmetric_difference(&head_ids).count()
-    } else {
-        0
-    };
+    let check = crate::jsonl::dirty_check(store, repo).map_err(|e| format!("dirty check: {}", e))?;
 
     if json {
         let out = serde_json::json!({
-            "dirty": dirty,
-            "changedIssues": changed_issues,
-            "paths": if dirty { serde_json::json!(["issues.jsonl"]) } else { serde_json::json!([]) },
+            "dirty": check.dirty,
+            "changedIssues": check.changed_issues,
+            "paths": check.paths,
         });
         let line = serde_json::to_string(&out).map_err(|e| format!("json encode failed: {}", e))?;
         writeln!(writer, "{}", line).map_err(|e| e.to_string())?;
-    } else if dirty {
+    } else if check.dirty {
         writeln!(
             writer,
             "would commit ({} issue{} differ from HEAD)",
-            changed_issues,
-            if changed_issues == 1 { "" } else { "s" }
+            check.changed_issues,
+            if check.changed_issues == 1 { "" } else { "s" }
         )
         .map_err(|e| e.to_string())?;
-        writeln!(writer, "  issues.jsonl").map_err(|e| e.to_string())?;
+        for p in &check.paths {
+            writeln!(writer, "  {}", p).map_err(|e| e.to_string())?;
+        }
     } else {
         writeln!(writer, "clean").map_err(|e| e.to_string())?;
     }
 
-    std::process::exit(if dirty { 1 } else { 0 });
+    std::process::exit(if check.dirty { 1 } else { 0 });
 }
 
 #[allow(clippy::too_many_arguments)]

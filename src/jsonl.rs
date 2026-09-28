@@ -6,7 +6,7 @@ use crate::issue::{Issue, IssueType, Resolution, Status};
 use crate::storage::{Store, StoreError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -170,6 +170,46 @@ pub fn export_to_file<P: AsRef<Path>>(store: &Store, path: P) -> Result<()> {
     export_to_jsonl(store, &mut writer)?;
     writer.flush()?;
     Ok(())
+}
+
+/// Result of comparing the live DB against the `issues.jsonl` snapshot at HEAD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirtyCheck {
+    pub dirty: bool,
+    /// Number of issues that differ (added or removed) between DB and HEAD.
+    pub changed_issues: usize,
+    pub paths: Vec<String>,
+}
+
+/// Compares the current DB export against `HEAD:issues.jsonl`.
+///
+/// `clean` means a `bl commit` would produce no new commit. The check is
+/// zero-side-effect (no files written, no git calls other than `git show`).
+pub fn dirty_check(store: &Store, repo: &Path) -> std::io::Result<DirtyCheck> {
+    let mut buf = Vec::new();
+    export_to_jsonl(store, &mut buf).map_err(std::io::Error::other)?;
+    let head = crate::git::head_file(repo, "issues.jsonl").unwrap_or_default();
+    let dirty = buf != head.as_bytes();
+    let changed_issues = if dirty {
+        let parse_ids = |s: &str| -> HashSet<String> {
+            s.lines()
+                .filter(|l| !l.trim().is_empty())
+                .filter_map(|l| serde_json::from_str::<IssueExport>(l).ok())
+                .map(|e| e.id)
+                .collect()
+        };
+        let local_ids = parse_ids(std::str::from_utf8(&buf).unwrap_or(""));
+        let head_ids = parse_ids(&head);
+        local_ids.symmetric_difference(&head_ids).count()
+    } else {
+        0
+    };
+    let paths = if dirty { vec!["issues.jsonl".to_string()] } else { vec![] };
+    Ok(DirtyCheck {
+        dirty,
+        changed_issues,
+        paths,
+    })
 }
 
 /// Imports issues from the reader in JSONL format.

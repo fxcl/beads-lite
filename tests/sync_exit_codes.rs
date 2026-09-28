@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::prelude::*;
 use std::process::Command as StdCommand;
 use tempfile::TempDir;
 
@@ -72,6 +73,11 @@ impl TestRepo {
         let cur = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", format!("{}:{}", stub_dir.display(), cur));
         cmd
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        let out = StdCommand::new("git").args(args).current_dir(&self.path).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
     }
 }
 
@@ -196,4 +202,182 @@ fn sync_json_status_is_kebab_case() {
     // Actually `conflict_count` is a field not a status, so it's fine to appear as snake_case.
     // Just verify status field exists and is one of the allowed values.
     assert!(stdout.contains("\"status\":"));
+}
+
+#[test]
+fn sync_status_clean_returns_zero() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+    // Commit so HEAD's issues.jsonl matches DB.
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+
+    repo.bl()
+        .arg("sync")
+        .arg("--status")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("clean"));
+}
+
+#[test]
+fn sync_status_dirty_returns_one() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+
+    // New issue → DB diverges from HEAD.
+    repo.bl().arg("create").arg("Uncommitted").assert().success();
+
+    repo.bl()
+        .arg("sync")
+        .arg("--status")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("dirty"));
+}
+
+#[test]
+fn sync_status_json_clean() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+
+    let out = repo.bl().arg("sync").arg("--status").arg("--json").output().unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v.get("clean").and_then(|b| b.as_bool()), Some(true));
+    assert_eq!(v.get("dirty").and_then(|b| b.as_bool()), Some(false));
+}
+
+#[test]
+fn sync_status_json_dirty() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+
+    // No commit yet → DB has issue, HEAD doesn't → dirty.
+    let out = repo.bl().arg("sync").arg("--status").arg("--json").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v.get("dirty").and_then(|b| b.as_bool()), Some(true));
+    assert!(v.get("changedIssues").and_then(|n| n.as_u64()).unwrap() >= 1);
+}
+
+#[test]
+fn sync_status_does_not_write() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+
+    let head_before = repo.git(&["rev-parse", "HEAD"]);
+    let jsonl_before = std::fs::read_to_string(repo.path.join("issues.jsonl")).unwrap();
+
+    repo.bl().arg("sync").arg("--status").assert().code(0);
+    repo.bl().arg("sync").arg("--status").arg("--json").assert().code(0);
+
+    let head_after = repo.git(&["rev-parse", "HEAD"]);
+    assert_eq!(head_before, head_after, "--status must not advance HEAD");
+    let jsonl_after = std::fs::read_to_string(repo.path.join("issues.jsonl")).unwrap();
+    assert_eq!(jsonl_before, jsonl_after, "--status must not rewrite issues.jsonl");
+}
+
+#[test]
+fn sync_status_outside_git_errors() {
+    let tmp = TempDir::new().unwrap();
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "--allow-empty", "-m", "init", "-q"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    #[allow(deprecated)]
+    let mut cmd = Command::cargo_bin("bl").unwrap();
+    cmd.current_dir(tmp.path());
+    cmd.arg("init").assert().success();
+
+    // After init, --status should work (we ARE in a git repo).
+    #[allow(deprecated)]
+    let mut cmd2 = Command::cargo_bin("bl").unwrap();
+    cmd2.current_dir(tmp.path());
+    cmd2.arg("sync").arg("--status").assert().code(0);
+}
+
+#[test]
+fn sync_flush_only_commits_changes() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task A").assert().success();
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+    let head_before = repo.git(&["rev-parse", "HEAD"]);
+
+    repo.bl().arg("create").arg("Task B").assert().success();
+
+    repo.bl()
+        .arg("sync")
+        .arg("--flush-only")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("Flushed local changes"));
+
+    let head_after = repo.git(&["rev-parse", "HEAD"]);
+    assert_ne!(head_before, head_after, "--flush-only must create a new commit");
+
+    let log = repo.git(&["log", "--oneline"]);
+    assert!(log.contains("bl sync"), "expected 'bl sync' in log: {}", log);
+}
+
+#[test]
+fn sync_flush_only_noop_when_clean() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+    let head_before = repo.git(&["rev-parse", "HEAD"]);
+
+    repo.bl()
+        .arg("sync")
+        .arg("--flush-only")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("No changes"));
+
+    let head_after = repo.git(&["rev-parse", "HEAD"]);
+    assert_eq!(head_before, head_after, "--flush-only must not create empty commit");
+}
+
+#[test]
+fn sync_flush_only_does_not_pull_or_push() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("create").arg("Task").assert().success();
+    repo.bl().arg("sync").arg("--no-push").assert().code(0);
+
+    // No remote configured — `--flush-only` must NOT try to push (no remote error).
+    repo.bl().arg("create").arg("Another").assert().success();
+    repo.bl().arg("sync").arg("--flush-only").assert().code(0);
+}
+
+#[test]
+fn sync_status_and_flush_only_conflict() {
+    let repo = TestRepo::new();
+    repo.bl().arg("init").assert().success();
+    repo.bl().arg("sync").arg("--status").arg("--flush-only").assert().failure();
 }
