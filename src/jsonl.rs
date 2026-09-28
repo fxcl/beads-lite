@@ -1,5 +1,6 @@
 //! JSONL import/export for git-friendly backups.
 
+use crate::comment::Comment;
 use crate::dependency::{DepType, Dependency};
 use crate::issue::{Issue, IssueType, Resolution, Status};
 use crate::storage::{Store, StoreError};
@@ -45,6 +46,10 @@ pub struct IssueExport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_reason: Option<String>,
     pub dependencies: Vec<DependencyExport>,
+    /// Embedded comments on the issue. `#[serde(default)]` keeps the import
+    /// compatible with JSONL files written before comments existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<CommentExport>,
 }
 
 fn is_empty_resolution(r: &Resolution) -> bool {
@@ -59,6 +64,41 @@ pub struct DependencyExport {
     pub dep_type: DepType,
 }
 
+/// CommentExport is the on-the-wire shape of a [`Comment`] embedded inside
+/// an `IssueExport`. Field order matches the [`Comment`] struct.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CommentExport {
+    pub id: String,
+    pub issue_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<&Comment> for CommentExport {
+    fn from(c: &Comment) -> Self {
+        Self {
+            id: c.id.clone(),
+            issue_id: c.issue_id.clone(),
+            author: c.author.clone(),
+            body: c.body.clone(),
+            created_at: c.created_at,
+        }
+    }
+}
+
+impl From<CommentExport> for Comment {
+    fn from(c: CommentExport) -> Self {
+        Self {
+            id: c.id,
+            issue_id: c.issue_id,
+            author: c.author,
+            body: c.body,
+            created_at: c.created_at,
+        }
+    }
+}
+
 /// ImportStats tracks the results of an import operation.
 #[derive(Debug, Default)]
 pub struct ImportStats {
@@ -66,8 +106,8 @@ pub struct ImportStats {
     pub updated: usize,
 }
 
-/// Converts an Issue and its dependencies to an IssueExport.
-pub fn to_issue_export(issue: &Issue, deps: &[Dependency]) -> IssueExport {
+/// Converts an Issue, its dependencies, and its comments to an `IssueExport`.
+pub fn to_issue_export(issue: &Issue, deps: &[Dependency], comments: &[Comment]) -> IssueExport {
     IssueExport {
         id: issue.id.clone(),
         title: issue.title.clone(),
@@ -87,29 +127,40 @@ pub fn to_issue_export(issue: &Issue, deps: &[Dependency]) -> IssueExport {
                 dep_type: d.dep_type.clone(),
             })
             .collect(),
+        comments: comments.iter().map(CommentExport::from).collect(),
     }
 }
 
-/// Writes issues with their dependencies to a writer in JSONL format.
-pub fn write_issues_as_jsonl<W: Write>(issues: &[Issue], all_deps: &HashMap<String, Vec<Dependency>>, writer: &mut W) -> Result<()> {
+/// Writes issues with their dependencies and comments to a writer in JSONL format.
+pub fn write_issues_as_jsonl<W: Write>(
+    issues: &[Issue],
+    all_deps: &HashMap<String, Vec<Dependency>>,
+    all_comments: &HashMap<String, Vec<Comment>>,
+    writer: &mut W,
+) -> Result<()> {
     for issue in issues {
         let deps = all_deps.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
-        let export = to_issue_export(issue, deps);
+        let comments = all_comments.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let export = to_issue_export(issue, deps, comments);
         serde_json::to_writer(&mut *writer, &export)?;
         writeln!(writer)?;
     }
     Ok(())
 }
 
-/// Exports all issues to the writer in JSONL format.
+/// Exports all issues (with deps + comments) to the writer in JSONL format.
 pub fn export_to_jsonl<W: Write>(store: &Store, writer: &mut W) -> Result<()> {
     let mut issues = store.list_issues()?;
     let all_deps = store.get_all_dependencies()?;
+    let mut all_comments: HashMap<String, Vec<Comment>> = HashMap::new();
+    for c in store.list_all_comments()? {
+        all_comments.entry(c.issue_id.clone()).or_default().push(c);
+    }
 
     // Sort by ID for deterministic output
     issues.sort_by(|a, b| a.id.cmp(&b.id));
 
-    write_issues_as_jsonl(&issues, &all_deps, writer)
+    write_issues_as_jsonl(&issues, &all_deps, &all_comments, writer)
 }
 
 /// Exports all issues to the specified file in JSONL format.
@@ -212,7 +263,7 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
             }
         }
 
-        // Phase 2: Clear old dependencies and add new ones
+        // Phase 2: Clear old dependencies + comments, then add new ones
         for (i, export) in exports.iter().enumerate() {
             let line_num = i + 1;
 
@@ -236,6 +287,45 @@ pub fn import_from_jsonl<R: BufRead>(store: &mut Store, reader: R) -> Result<Imp
                 )
                 .map_err(|e| StoreError::Validation(format!("line {}: {}", line_num, e)))?;
             }
+
+            // Clear existing comments for this issue, then add new ones
+            conn.execute("DELETE FROM comments WHERE issue_id = ?1", [&export.id])
+                .map_err(|e| StoreError::Validation(format!("line {}: {}", line_num, e)))?;
+
+            for c in &export.comments {
+                let c: Comment = c.clone().into();
+                conn.execute(
+                    r#"
+                    INSERT OR IGNORE INTO comments (id, issue_id, author, body, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    "#,
+                    rusqlite::params![
+                        c.id,
+                        c.issue_id,
+                        c.author,
+                        c.body,
+                        c.created_at.to_rfc3339(),
+                    ],
+                )
+                .map_err(|e| StoreError::Validation(format!("line {}: {}", line_num, e)))?;
+            }
+        }
+
+        // Drop comments belonging to issues no longer in the import.
+        let keep: Vec<String> = exports.iter().map(|e| e.id.clone()).collect();
+        if keep.is_empty() {
+            conn.execute("DELETE FROM comments", [])
+                .map_err(|e| StoreError::Validation(format!("purge comments: {}", e)))?;
+        } else {
+            let placeholders: Vec<&str> = std::iter::repeat_n("?", keep.len()).collect();
+            let sql = format!(
+                "DELETE FROM comments WHERE issue_id NOT IN ({})",
+                placeholders.join(",")
+            );
+            let params: Vec<&dyn rusqlite::ToSql> =
+                keep.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            conn.execute(&sql, params.as_slice())
+                .map_err(|e| StoreError::Validation(format!("purge comments: {}", e)))?;
         }
 
         Ok(stats)

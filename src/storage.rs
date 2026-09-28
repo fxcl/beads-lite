@@ -69,6 +69,17 @@ impl Store {
 
             CREATE INDEX IF NOT EXISTS idx_deps_type ON dependencies(type, depends_on_id);
             CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+
+            CREATE TABLE IF NOT EXISTS comments (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id);
             "#,
         )?;
 
@@ -492,6 +503,97 @@ impl Store {
                 Err(e)
             }
         }
+    }
+
+    /// Inserts a comment. `comment.id` must be unique.
+    pub fn add_comment(&self, comment: &crate::comment::Comment) -> Result<()> {
+        comment.validate().map_err(|e| StoreError::Validation(e.to_string()))?;
+        self.conn.execute(
+            r#"
+            INSERT INTO comments (id, issue_id, author, body, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                comment.id,
+                comment.issue_id,
+                comment.author,
+                comment.body,
+                comment.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Returns all comments for an issue, sorted by creation time.
+    pub fn list_comments_for_issue(&self, issue_id: &str) -> Result<Vec<crate::comment::Comment>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, issue_id, author, body, created_at
+            FROM comments
+            WHERE issue_id = ?1
+            ORDER BY created_at ASC, id ASC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![issue_id], |row| {
+            let created_str: String = row.get(4)?;
+            Ok(crate::comment::Comment {
+                id: row.get(0)?,
+                issue_id: row.get(1)?,
+                author: row.get(2)?,
+                body: row.get(3)?,
+                created_at: DateTime::parse_from_rfc3339(&created_str)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Returns all comments in the database (id, issue_id, author, body, created_at).
+    /// Used by sync export. Sorted by issue then created_at for stable JSONL output.
+    pub fn list_all_comments(&self) -> Result<Vec<crate::comment::Comment>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, issue_id, author, body, created_at
+            FROM comments
+            ORDER BY issue_id ASC, created_at ASC, id ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let created_str: String = row.get(4)?;
+            Ok(crate::comment::Comment {
+                id: row.get(0)?,
+                issue_id: row.get(1)?,
+                author: row.get(2)?,
+                body: row.get(3)?,
+                created_at: DateTime::parse_from_rfc3339(&created_str)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Deletes comments belonging to issues that are NOT in `keep_issue_ids`.
+    /// Used by sync apply to drop comments for issues removed during merge.
+    pub fn delete_comments_for_issues_not_in(&mut self, keep_issue_ids: &[String]) -> Result<()> {
+        if keep_issue_ids.is_empty() {
+            self.conn.execute("DELETE FROM comments", [])?;
+            return Ok(());
+        }
+        let placeholders: Vec<&str> = std::iter::repeat_n("?", keep_issue_ids.len()).collect();
+        let sql = format!("DELETE FROM comments WHERE issue_id NOT IN ({})", placeholders.join(","));
+        let params: Vec<&dyn rusqlite::ToSql> = keep_issue_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        self.conn.execute(&sql, params.as_slice())?;
+        Ok(())
     }
 }
 

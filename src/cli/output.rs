@@ -39,9 +39,14 @@ pub fn output_issues<W: Write>(store: &Store, issues: &[Issue], writer: &mut W, 
 /// Outputs issues as JSONL.
 fn output_issues_json<W: Write>(store: &Store, issues: &[Issue], writer: &mut W) -> std::io::Result<()> {
     let all_deps = store.get_all_dependencies().unwrap_or_default();
+    let mut all_comments: std::collections::HashMap<String, Vec<crate::comment::Comment>> = std::collections::HashMap::new();
+    for c in store.list_all_comments().unwrap_or_default() {
+        all_comments.entry(c.issue_id.clone()).or_default().push(c);
+    }
     for issue in issues {
         let deps = all_deps.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
-        let export = to_issue_export(issue, deps);
+        let comments = all_comments.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let export = to_issue_export(issue, deps, comments);
         serde_json::to_writer(&mut *writer, &export).map_err(std::io::Error::other)?;
         writeln!(writer)?;
     }
@@ -114,8 +119,9 @@ fn print_tree<W: Write>(writer: &mut W, children: &HashMap<&str, Vec<&Issue>>, p
 }
 
 /// Outputs a single issue as JSON.
-pub fn output_single_issue_json<W: Write>(issue: &Issue, deps: &[Dependency], writer: &mut W) -> std::io::Result<()> {
-    let export = to_issue_export(issue, deps);
+pub fn output_single_issue_json<W: Write>(store: &Store, issue: &Issue, deps: &[Dependency], writer: &mut W) -> std::io::Result<()> {
+    let comments = store.list_comments_for_issue(&issue.id).unwrap_or_default();
+    let export = to_issue_export(issue, deps, &comments);
     serde_json::to_writer(&mut *writer, &export).map_err(std::io::Error::other)?;
     writeln!(writer)?;
     Ok(())

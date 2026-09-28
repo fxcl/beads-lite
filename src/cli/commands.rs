@@ -175,6 +175,26 @@ pub enum Commands {
         /// Output file (stdout if not specified)
         file: Option<PathBuf>,
     },
+    /// Add a comment to an issue
+    Comment {
+        /// Issue ID
+        id: String,
+        /// Comment text (joined with spaces). Mutually exclusive with --stdin/--file.
+        #[arg(required_unless_present_any = ["stdin", "file"])]
+        text: Vec<String>,
+        /// Read comment text from stdin
+        #[arg(long, conflicts_with_all = ["text", "file"])]
+        stdin: bool,
+        /// Read comment text from file
+        #[arg(long, conflicts_with_all = ["text", "stdin"])]
+        file: Option<PathBuf>,
+        /// Override author (default: git config user.name)
+        #[arg(long)]
+        author: Option<String>,
+        /// Output the new comment as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Import issues from JSONL file
     Import {
         /// Input file
@@ -360,6 +380,17 @@ fn run_command<W: Write>(cmd: Commands, writer: &mut W) -> Result<(), String> {
         Commands::Import { file } => {
             let store = open_store()?;
             cmd_import(store, &file, writer)
+        }
+        Commands::Comment {
+            id,
+            text,
+            stdin,
+            file,
+            author,
+            json,
+        } => {
+            let store = open_store()?;
+            cmd_comment(store, id, text, stdin, file, author, json, writer)
         }
         Commands::Sync { attempts, no_push, json } => {
             let store = open_store()?;
@@ -620,7 +651,7 @@ fn cmd_show<W: Write>(store: Store, id: String, json: bool, writer: &mut W) -> R
 
     if json {
         let deps = store.get_dependencies(&id).unwrap_or_default();
-        output_single_issue_json(&issue, &deps, writer).map_err(|e| e.to_string())?;
+        output_single_issue_json(&store, &issue, &deps, writer).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -964,6 +995,64 @@ fn cmd_commit_check<W: Write>(store: &Store, repo: &std::path::Path, json: bool,
     }
 
     std::process::exit(if dirty { 1 } else { 0 });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_comment<W: Write>(
+    store: Store,
+    id: String,
+    text: Vec<String>,
+    stdin: bool,
+    file: Option<PathBuf>,
+    author: Option<String>,
+    json: bool,
+    writer: &mut W,
+) -> Result<(), String> {
+    // Resolve text source.
+    let body = if stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("read stdin: {}", e))?;
+        buf.trim_end_matches('\n').trim_end_matches('\r').to_string()
+    } else if let Some(path) = file {
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?
+    } else if !text.is_empty() {
+        text.join(" ")
+    } else {
+        return Err("comment text required: positional args, --stdin, or --file".to_string());
+    };
+
+    let body = body.trim().to_string();
+    if body.is_empty() {
+        return Err("comment body must not be empty".to_string());
+    }
+
+    // Verify issue exists; otherwise fail with a useful error.
+    let issue = store.get_issue(&id).map_err(|e| match e {
+        crate::storage::StoreError::IssueNotFound => format!("issue {} not found", id),
+        other => format!("issue {}: {}", id, other),
+    })?;
+
+    let author = author.unwrap_or_else(crate::git::current_user);
+    let comment = crate::comment::Comment::new(issue.id.clone(), author, body);
+    store.add_comment(&comment).map_err(|e| format!("add comment: {}", e))?;
+
+    if json {
+        let out = serde_json::json!({
+            "id": comment.id,
+            "issue_id": comment.issue_id,
+            "author": comment.author,
+            "body": comment.body,
+            "created_at": comment.created_at.to_rfc3339(),
+        });
+        let line = serde_json::to_string(&out).map_err(|e| format!("json encode failed: {}", e))?;
+        writeln!(writer, "{}", line).map_err(|e| e.to_string())?;
+    } else {
+        writeln!(writer, "added comment {} to issue {}", comment.id, issue.id).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn cmd_onboard<W: Write>(writer: &mut W) -> Result<(), String> {

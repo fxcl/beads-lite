@@ -79,6 +79,25 @@ pub fn head_file(repo: &Path, path: &str) -> Option<String> {
     }
 }
 
+/// Returns the current git user's name (preferred for comment authorship).
+/// Falls back to system user, then to `"unknown"`.
+pub fn current_user() -> String {
+    if let Ok(out) = Command::new("git").args(["config", "user.name"]).output() {
+        if out.status.success() {
+            let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    if let Ok(name) = std::env::var("USER") {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    "unknown".to_string()
+}
+
 /// Returns true if `git diff --cached` is non-empty (i.e., there are staged
 /// changes ready to commit).
 pub fn has_staged_changes(repo: &Path) -> Result<bool, GitError> {

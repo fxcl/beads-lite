@@ -152,11 +152,16 @@ impl SyncEngine {
     fn load_local(&self) -> Result<HashMap<String, IssueExport>> {
         let issues = self.store.list_issues()?;
         let all_deps = self.store.get_all_dependencies()?;
+        let mut all_comments: HashMap<String, Vec<crate::comment::Comment>> = HashMap::new();
+        for c in self.store.list_all_comments()? {
+            all_comments.entry(c.issue_id.clone()).or_default().push(c);
+        }
         let mut map = HashMap::new();
 
         for issue in issues {
             let deps = all_deps.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
-            let export = jsonl::to_issue_export(&issue, deps);
+            let comments = all_comments.get(&issue.id).map(|v| v.as_slice()).unwrap_or(&[]);
+            let export = jsonl::to_issue_export(&issue, deps, comments);
             map.insert(export.id.clone(), export);
         }
         Ok(map)
