@@ -982,10 +982,6 @@ fn cmd_sync_flush_only<W: Write>(store: &Store, repo: &std::path::Path, writer: 
 }
 
 fn cmd_commit<W: Write>(store: Store, message: Option<String>, stdin: bool, check: bool, json: bool, writer: &mut W) -> Result<(), String> {
-    if stdin && message.is_some() {
-        return Err("--stdin and -m are mutually exclusive".to_string());
-    }
-
     let cwd = std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
 
     if !git::is_repository(&cwd) {
